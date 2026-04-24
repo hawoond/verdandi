@@ -1,0 +1,254 @@
+package verdandi
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+type Options struct {
+	DataDir string
+}
+
+type Tool struct {
+	classifier   Classifier
+	orchestrator Orchestrator
+	store        Store
+}
+
+func NewTool(options Options) Tool {
+	dataDir := options.DataDir
+	if dataDir == "" {
+		dataDir = DefaultDataDir()
+	}
+	return Tool{
+		classifier:   NewClassifier(),
+		orchestrator: NewOrchestrator(dataDir),
+		store:        NewStore(filepath.Join(dataDir, "runs.json")),
+	}
+}
+
+func (t Tool) Analyze(request string) (map[string]any, error) {
+	if request == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
+
+	analysis := t.classifier.Analyze(request)
+	contract := AgentContract{
+		Name:        agentName(analysis.Intent.Category),
+		Description: "Natural-language Verdandi agent contract",
+		Command:     "verdandi",
+		Spec: AgentSpec{
+			Role:         analysis.Intent.Category,
+			Capabilities: capabilitiesFor(analysis.Intent.Category),
+		},
+		Metadata: map[string]any{
+			"intent_analysis": analysis.Intent,
+			"complexity":      analysis.Complexity,
+		},
+		Inputs: map[string]string{
+			"request": request,
+		},
+	}
+
+	return map[string]any{
+		"ok":         true,
+		"action":     "analyze",
+		"intent":     analysis.Intent.Category,
+		"confidence": analysis.Intent.Confidence,
+		"agent":      contract,
+	}, nil
+}
+
+func (t Tool) Run(request string, options ...map[string]any) (map[string]any, error) {
+	runOptions := map[string]any{}
+	if len(options) > 0 && options[0] != nil {
+		runOptions = options[0]
+	}
+	result, err := t.orchestrator.Execute(request, runOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	status := "success"
+	if result.Summary.Failed > 0 {
+		status = "error"
+	}
+
+	record := RunRecord{
+		RunID:       createRunID(),
+		Status:      status,
+		Request:     request,
+		OutputDir:   result.OutputDir,
+		Summary:     result.Summary,
+		Stages:      result.Stages,
+		CreatedAt:   time.Now().UTC(),
+		CompletedAt: result.CompletedAt,
+	}
+	if err := t.store.Save(record); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"ok":        status == "success",
+		"action":    "run",
+		"runId":     record.RunID,
+		"status":    record.Status,
+		"request":   request,
+		"summary":   record.Summary,
+		"outputDir": record.OutputDir,
+	}, nil
+}
+
+func (t Tool) Orchestrate(request string, options map[string]any) (map[string]any, error) {
+	result, err := t.Run(request, options)
+	if err != nil {
+		return nil, err
+	}
+	result["action"] = "orchestrate"
+	return result, nil
+}
+
+func (t Tool) GetStatus(runID string) (map[string]any, error) {
+	record, err := t.store.Find(runID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":           true,
+		"action":       "status",
+		"runId":        record.RunID,
+		"status":       record.Status,
+		"request":      record.Request,
+		"outputDir":    record.OutputDir,
+		"summary":      record.Summary,
+		"stages":       record.Stages,
+		"created_at":   record.CreatedAt,
+		"completed_at": record.CompletedAt,
+	}, nil
+}
+
+func (t Tool) OpenOutput(runID string) (map[string]any, error) {
+	record, err := t.store.Find(runID)
+	if err != nil {
+		return nil, err
+	}
+	if record.OutputDir == "" {
+		return nil, fmt.Errorf("출력 디렉토리가 없습니다")
+	}
+
+	entries, err := os.ReadDir(record.OutputDir)
+	if err != nil {
+		return nil, err
+	}
+
+	files := []FileInfo{}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, FileInfo{
+			Name:        entry.Name(),
+			Path:        filepath.Join(record.OutputDir, entry.Name()),
+			Size:        info.Size(),
+			IsDirectory: entry.IsDir(),
+		})
+	}
+
+	return map[string]any{
+		"ok":        true,
+		"action":    "open_output",
+		"runId":     runID,
+		"outputDir": record.OutputDir,
+		"files":     files,
+	}, nil
+}
+
+func (t Tool) Handle(action string, params map[string]any) (map[string]any, error) {
+	switch action {
+	case "run":
+		return t.Run(requiredString(params, "request"), optionalObject(params, "options"))
+	case "analyze":
+		return t.Analyze(requiredString(params, "request"))
+	case "orchestrate":
+		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
+	case "status", "get_status":
+		return t.GetStatus(requiredString(params, "runId"))
+	case "open_output":
+		return t.OpenOutput(requiredString(params, "runId"))
+	default:
+		return nil, fmt.Errorf("알 수 없는 Verdandi action: %s", action)
+	}
+}
+
+func DefaultDataDir() string {
+	if value := os.Getenv("VERDANDI_DATA_DIR"); value != "" {
+		return value
+	}
+	return ".verdandi"
+}
+
+func requiredString(params map[string]any, key string) string {
+	if params == nil {
+		return ""
+	}
+	value, _ := params[key].(string)
+	return value
+}
+
+func optionalObject(params map[string]any, key string) map[string]any {
+	if params == nil {
+		return nil
+	}
+	value, ok := params[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return value
+}
+
+func createRunID() string {
+	return fmt.Sprintf("run_%d", time.Now().UTC().UnixNano())
+}
+
+func agentName(intent string) string {
+	switch intent {
+	case IntentOrchestrator:
+		return "VerdandiOrchestrator"
+	case IntentPlanner:
+		return "VerdandiPlanner"
+	case IntentDocumenter:
+		return "VerdandiDocumenter"
+	case IntentResearcher:
+		return "VerdandiResearcher"
+	default:
+		return "VerdandiAgent"
+	}
+}
+
+func capabilitiesFor(intent string) []string {
+	common := []string{"natural-language-request", "context-aware-execution"}
+	switch intent {
+	case IntentOrchestrator:
+		return append(common, "workflow-planning", "agent-coordination")
+	case IntentPlanner:
+		return append(common, "requirements-analysis", "planning")
+	case IntentDocumenter:
+		return append(common, "documentation")
+	case IntentCodeWriter:
+		return append(common, "code-generation", "validation")
+	default:
+		return common
+	}
+}
+
+func toJSON(value any) string {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(encoded)
+}
