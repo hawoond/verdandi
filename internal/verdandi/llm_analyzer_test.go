@@ -209,6 +209,10 @@ func TestLLMAnalyzerSendsExistingAgentContext(t *testing.T) {
 		t.Fatalf("expected messages in payload, got %#v", payload.Messages)
 	}
 	userContent := payload.Messages[len(payload.Messages)-1].Content
+	systemContent := payload.Messages[0].Content
+	if !strings.Contains(systemContent, "metrics") {
+		t.Fatalf("expected system prompt to instruct metrics-aware lifecycle decisions, got %s", systemContent)
+	}
 	if !strings.Contains(userContent, "ExistingAccessibilityAgent") {
 		t.Fatalf("expected existing agent context in LLM payload, got %s", userContent)
 	}
