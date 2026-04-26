@@ -180,9 +180,11 @@ func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionR
 		started := time.Now().UTC()
 		stageOutput, err := o.executeStage(stage.Stage, plan.OriginalRequest, previous)
 		record := StageResult{
-			Stage:   stage.Stage,
-			Started: started,
-			Ended:   time.Now().UTC(),
+			Stage:         stage.Stage,
+			Agent:         stage.Agent,
+			AgentDecision: stage.AgentDecision,
+			Started:       started,
+			Ended:         time.Now().UTC(),
 		}
 		if err != nil {
 			record.Status = "error"

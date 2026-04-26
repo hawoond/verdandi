@@ -18,6 +18,7 @@ type Tool struct {
 	analyzer     Analyzer
 	orchestrator Orchestrator
 	store        Store
+	agents       AgentRegistry
 }
 
 func NewTool(options Options) Tool {
@@ -34,6 +35,7 @@ func NewTool(options Options) Tool {
 		}),
 		orchestrator: orchestrator,
 		store:        NewStore(filepath.Join(dataDir, "runs.json")),
+		agents:       NewAgentRegistry(filepath.Join(dataDir, "agents.json")),
 	}
 }
 
@@ -95,7 +97,11 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	result, err := t.orchestrator.ExecutePlan(analysis.Plan, runOptions)
+	plan, err := t.agents.ResolvePlan(analysis.Plan, runOptions)
+	if err != nil {
+		return nil, err
+	}
+	result, err := t.orchestrator.ExecutePlan(plan, runOptions)
 	if err != nil {
 		return nil, err
 	}

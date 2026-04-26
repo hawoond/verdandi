@@ -287,4 +287,166 @@ func TestToolAnalyzeAndRunExposeDynamicAgents(t *testing.T) {
 	if stages[0].Stage != "code-writer" || stages[0].Result == nil {
 		t.Fatalf("expected code writer execution, got %#v", stages)
 	}
+	if stages[0].Agent == nil || stages[0].Agent.Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("expected selected dynamic agent in stage result, got %#v", stages[0].Agent)
+	}
+}
+
+func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	firstTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "기존 접근성 UI 에이전트 생성", AgentContract{
+		Name:        "ExistingAccessibilityAgent",
+		Description: "Builds accessible interfaces.",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility", "semantic-html"},
+		},
+	}))
+	if _, err := firstTool.Run("기존 접근성 UI 에이전트 생성"); err != nil {
+		t.Fatalf("initial run failed: %v", err)
+	}
+
+	secondTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "접근성 좋은 대시보드 구현", AgentContract{
+		Name:        "DashboardAccessibilityAgent",
+		Description: "Builds accessible dashboards.",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility", "dashboard-ui"},
+		},
+	}))
+	run, err := secondTool.Run("접근성 좋은 대시보드 구현")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	status, err := secondTool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.Agent == nil || stage.Agent.Name != "ExistingAccessibilityAgent" {
+		t.Fatalf("expected similar agent to be reused, got %#v", stage.Agent)
+	}
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyReuseEnhance {
+		t.Fatalf("expected reuse-enhance decision, got %#v", stage.AgentDecision)
+	}
+	if !containsString(stage.Agent.Spec.Capabilities, "dashboard-ui") {
+		t.Fatalf("expected reused agent to gain new capability, got %#v", stage.Agent.Spec.Capabilities)
+	}
+}
+
+func TestToolRunCanRewriteSimilarAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	firstTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "기존 문서 에이전트 생성", AgentContract{
+		Name:        "LegacyDocumentationAgent",
+		Description: "Writes README files.",
+		Spec: AgentSpec{
+			Role:         "documentation engineer",
+			Capabilities: []string{"documentation", "readme"},
+		},
+	}))
+	if _, err := firstTool.Run("기존 문서 에이전트 생성"); err != nil {
+		t.Fatalf("initial run failed: %v", err)
+	}
+
+	rewriteTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "문서 에이전트를 새 기준으로 재작성", AgentContract{
+		Name:        "ModernDocumentationAgent",
+		Description: "Writes product guides.",
+		Spec: AgentSpec{
+			Role:         "documentation engineer",
+			Capabilities: []string{"documentation", "product-guide"},
+		},
+	}))
+	run, err := rewriteTool.Run("문서 에이전트를 새 기준으로 재작성", map[string]any{"agentPolicy": AgentPolicyRewrite})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	status, err := rewriteTool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.Agent == nil || stage.Agent.Name != "ModernDocumentationAgent" {
+		t.Fatalf("expected rewritten agent candidate to be selected, got %#v", stage.Agent)
+	}
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyRewrite {
+		t.Fatalf("expected rewrite decision, got %#v", stage.AgentDecision)
+	}
+	if stage.AgentDecision.ExistingAgentName != "LegacyDocumentationAgent" {
+		t.Fatalf("expected decision to identify rewritten agent, got %#v", stage.AgentDecision)
+	}
+}
+
+func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	firstTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "기존 분석 에이전트 생성", AgentContract{
+		Name:        "GeneralAnalysisAgent",
+		Description: "Analyzes product metrics.",
+		Spec: AgentSpec{
+			Role:         "data analyst",
+			Capabilities: []string{"data-analysis", "reporting"},
+		},
+	}))
+	if _, err := firstTool.Run("기존 분석 에이전트 생성"); err != nil {
+		t.Fatalf("initial run failed: %v", err)
+	}
+
+	separateTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "별도 실험 분석 에이전트 생성", AgentContract{
+		Name:        "ExperimentAnalysisAgent",
+		Description: "Analyzes experiments separately.",
+		Spec: AgentSpec{
+			Role:         "data analyst",
+			Capabilities: []string{"data-analysis", "experimentation"},
+		},
+	}))
+	run, err := separateTool.Run("별도 실험 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	status, err := separateTool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.Agent == nil || stage.Agent.Name != "ExperimentAnalysisAgent" {
+		t.Fatalf("expected candidate to remain separate, got %#v", stage.Agent)
+	}
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicySeparate {
+		t.Fatalf("expected separate decision, got %#v", stage.AgentDecision)
+	}
+	if stage.AgentDecision.ExistingAgentName != "GeneralAnalysisAgent" {
+		t.Fatalf("expected decision to identify similar existing agent, got %#v", stage.AgentDecision)
+	}
+}
+
+func analyzerForAgentPlan(t *testing.T, dataDir string, request string, agent AgentContract) Analyzer {
+	t.Helper()
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{{
+		Stage:   "code-writer",
+		Keyword: "llm",
+		Agent:   &agent,
+	}})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	return staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentCodeWriter, Confidence: 0.91},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 4},
+			Plan:       plan,
+			Source:     AnalyzerLLM,
+		},
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

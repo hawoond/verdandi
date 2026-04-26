@@ -50,10 +50,11 @@ type AgentSpec struct {
 }
 
 type StageDef struct {
-	Stage   string         `json:"stage"`
-	Keyword string         `json:"keyword"`
-	Order   int            `json:"order"`
-	Agent   *AgentContract `json:"agent,omitempty"`
+	Stage         string                  `json:"stage"`
+	Keyword       string                  `json:"keyword"`
+	Order         int                     `json:"order"`
+	Agent         *AgentContract          `json:"agent,omitempty"`
+	AgentDecision *AgentLifecycleDecision `json:"agentDecision,omitempty"`
 }
 
 type Edge struct {
@@ -74,12 +75,28 @@ type Plan struct {
 }
 
 type StageResult struct {
-	Stage   string       `json:"stage"`
-	Status  string       `json:"status"`
-	Result  *StageOutput `json:"result,omitempty"`
-	Error   string       `json:"error,omitempty"`
-	Started time.Time    `json:"started_at"`
-	Ended   time.Time    `json:"ended_at"`
+	Stage         string                  `json:"stage"`
+	Status        string                  `json:"status"`
+	Agent         *AgentContract          `json:"agent,omitempty"`
+	AgentDecision *AgentLifecycleDecision `json:"agentDecision,omitempty"`
+	Result        *StageOutput            `json:"result,omitempty"`
+	Error         string                  `json:"error,omitempty"`
+	Started       time.Time               `json:"started_at"`
+	Ended         time.Time               `json:"ended_at"`
+}
+
+const (
+	AgentPolicyReuseEnhance = "reuse-enhance"
+	AgentPolicyRewrite      = "rewrite"
+	AgentPolicySeparate     = "separate"
+)
+
+type AgentLifecycleDecision struct {
+	Action            string   `json:"action"`
+	ExistingAgentName string   `json:"existingAgentName,omitempty"`
+	Reason            string   `json:"reason"`
+	Similarity        float64  `json:"similarity,omitempty"`
+	Options           []string `json:"options"`
 }
 
 type StageOutput struct {
