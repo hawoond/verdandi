@@ -109,8 +109,17 @@ const (
 	AgentPolicySeparate     = "separate"
 )
 
+const (
+	AgentDecisionSourceRunOption              = "run-option"
+	AgentDecisionSourceStageDecision          = "stage-decision"
+	AgentDecisionSourceAgentMetadata          = "agent-metadata"
+	AgentDecisionSourceRegistryRecommendation = "registry-recommendation"
+	AgentDecisionSourceDefault                = "default"
+)
+
 type AgentLifecycleDecision struct {
 	Action            string   `json:"action"`
+	Source            string   `json:"source,omitempty"`
 	ExistingAgentName string   `json:"existingAgentName,omitempty"`
 	Reason            string   `json:"reason"`
 	Similarity        float64  `json:"similarity,omitempty"`

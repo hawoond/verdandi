@@ -17,6 +17,12 @@ type agentRegistryFile struct {
 	Agents []AgentContract `json:"agents"`
 }
 
+type resolvedAgentPolicy struct {
+	Action string
+	Source string
+	Reason string
+}
+
 func NewAgentRegistry(path string) AgentRegistry {
 	return AgentRegistry{path: path}
 }
@@ -49,16 +55,21 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 		candidate := cloneAgent(*stage.Agent)
 		existingIndex, similarity := findAgentForDecision(store.Agents, candidate, stage.AgentDecision)
 		hasSimilar := existingIndex >= 0
-		action := resolveAgentPolicy(optionPolicy, hasOptionPolicy, stage, candidate, store.Agents, existingIndex)
+		resolved := resolveAgentPolicy(optionPolicy, hasOptionPolicy, stage, candidate, store.Agents, existingIndex)
+		action := resolved.Action
 		if !hasSimilar {
 			action = AgentPolicySeparate
 		}
 
 		decision := AgentLifecycleDecision{
 			Action:     action,
+			Source:     resolved.Source,
 			Reason:     agentDecisionReason(action, hasSimilar),
 			Similarity: similarity,
 			Options:    agentPolicyOptions(),
+		}
+		if resolved.Reason != "" {
+			decision.Reason = resolved.Reason
 		}
 		if stage.AgentDecision != nil {
 			if stage.AgentDecision.Reason != "" {
@@ -163,23 +174,43 @@ func findAgentForDecision(agents []AgentContract, candidate AgentContract, decis
 	return findSimilarAgent(agents, candidate)
 }
 
-func resolveAgentPolicy(optionPolicy string, hasOptionPolicy bool, stage StageDef, candidate AgentContract, agents []AgentContract, existingIndex int) string {
+func resolveAgentPolicy(optionPolicy string, hasOptionPolicy bool, stage StageDef, candidate AgentContract, agents []AgentContract, existingIndex int) resolvedAgentPolicy {
 	if hasOptionPolicy {
-		return optionPolicy
+		return resolvedAgentPolicy{
+			Action: optionPolicy,
+			Source: AgentDecisionSourceRunOption,
+			Reason: "run options selected the agent lifecycle policy",
+		}
 	}
 	if stage.AgentDecision != nil && isAgentPolicy(stage.AgentDecision.Action) {
-		return stage.AgentDecision.Action
+		return resolvedAgentPolicy{
+			Action: stage.AgentDecision.Action,
+			Source: AgentDecisionSourceStageDecision,
+			Reason: stage.AgentDecision.Reason,
+		}
 	}
 	if candidatePolicy := agentPolicyFromMetadata(candidate.Metadata); candidatePolicy != "" {
-		return candidatePolicy
+		return resolvedAgentPolicy{
+			Action: candidatePolicy,
+			Source: AgentDecisionSourceAgentMetadata,
+			Reason: "agent metadata selected the lifecycle policy",
+		}
 	}
 	if existingIndex >= 0 {
 		recommendation := recommendAgentLifecycle(agents[existingIndex].Metrics)
 		if recommendation.Action == AgentPolicyReuseEnhance || recommendation.Action == AgentPolicyRewrite {
-			return recommendation.Action
+			return resolvedAgentPolicy{
+				Action: recommendation.Action,
+				Source: AgentDecisionSourceRegistryRecommendation,
+				Reason: recommendation.Reason,
+			}
 		}
 	}
-	return AgentPolicyReuseEnhance
+	return resolvedAgentPolicy{
+		Action: AgentPolicyReuseEnhance,
+		Source: AgentDecisionSourceDefault,
+		Reason: "",
+	}
 }
 
 func findAgentByName(agents []AgentContract, name string) int {
