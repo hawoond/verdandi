@@ -37,6 +37,12 @@ func NewTool(options Options) Tool {
 	}
 }
 
+func NewToolWithAnalyzer(options Options, analyzer Analyzer) Tool {
+	tool := NewTool(options)
+	tool.analyzer = analyzer
+	return tool
+}
+
 func (t Tool) Analyze(request string) (map[string]any, error) {
 	if request == "" {
 		return nil, fmt.Errorf("request 문자열이 필요합니다")
@@ -80,10 +86,15 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if len(options) > 0 && options[0] != nil {
 		runOptions = options[0]
 	}
-	result, err := t.orchestrator.Execute(request, runOptions)
+	analysis, err := t.analyzer.Analyze(request)
 	if err != nil {
 		return nil, err
 	}
+	result, err := t.orchestrator.ExecutePlan(analysis.Plan, runOptions)
+	if err != nil {
+		return nil, err
+	}
+	result.Analyzer = analysis.Source
 
 	status := "success"
 	if result.Summary.Failed > 0 {
@@ -94,6 +105,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		RunID:       createRunID(),
 		Status:      status,
 		Request:     request,
+		Analyzer:    result.Analyzer,
 		OutputDir:   result.OutputDir,
 		Summary:     result.Summary,
 		Stages:      result.Stages,
@@ -110,6 +122,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		"runId":     record.RunID,
 		"status":    record.Status,
 		"request":   request,
+		"analyzer":  record.Analyzer,
 		"summary":   record.Summary,
 		"outputDir": record.OutputDir,
 	}, nil
@@ -135,6 +148,7 @@ func (t Tool) GetStatus(runID string) (map[string]any, error) {
 		"runId":        record.RunID,
 		"status":       record.Status,
 		"request":      record.Request,
+		"analyzer":     record.Analyzer,
 		"outputDir":    record.OutputDir,
 		"summary":      record.Summary,
 		"stages":       record.Stages,
