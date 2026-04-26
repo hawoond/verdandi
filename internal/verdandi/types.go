@@ -42,11 +42,22 @@ type AgentContract struct {
 	Spec        AgentSpec         `json:"spec"`
 	Metadata    map[string]any    `json:"metadata"`
 	Inputs      map[string]string `json:"inputs"`
+	Metrics     AgentMetrics      `json:"metrics,omitempty"`
 }
 
 type AgentSpec struct {
 	Role         string   `json:"role"`
 	Capabilities []string `json:"capabilities"`
+}
+
+type AgentMetrics struct {
+	TotalRuns   int       `json:"totalRuns"`
+	SuccessRuns int       `json:"successRuns"`
+	FailureRuns int       `json:"failureRuns"`
+	SuccessRate float64   `json:"successRate"`
+	LastStatus  string    `json:"lastStatus,omitempty"`
+	LastError   string    `json:"lastError,omitempty"`
+	LastRunAt   time.Time `json:"lastRunAt,omitempty"`
 }
 
 type StageDef struct {

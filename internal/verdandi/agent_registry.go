@@ -107,6 +107,31 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 	return plan, nil
 }
 
+func (r AgentRegistry) RecordStageResults(stages []StageResult) error {
+	store, err := r.load()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, stage := range stages {
+		if stage.Agent == nil || stage.Agent.Name == "" {
+			continue
+		}
+		index := findAgentByName(store.Agents, stage.Agent.Name)
+		if index < 0 {
+			agent := cloneAgent(*stage.Agent)
+			store.Agents = append(store.Agents, agent)
+			index = len(store.Agents) - 1
+		}
+		store.Agents[index].Metrics = updateAgentMetrics(store.Agents[index].Metrics, stage)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return r.write(store)
+}
+
 func findAgentForDecision(agents []AgentContract, candidate AgentContract, decision *AgentLifecycleDecision) (int, float64) {
 	if decision != nil && decision.ExistingAgentName != "" {
 		for index, agent := range agents {
@@ -116,6 +141,32 @@ func findAgentForDecision(agents []AgentContract, candidate AgentContract, decis
 		}
 	}
 	return findSimilarAgent(agents, candidate)
+}
+
+func findAgentByName(agents []AgentContract, name string) int {
+	for index, agent := range agents {
+		if strings.EqualFold(agent.Name, name) {
+			return index
+		}
+	}
+	return -1
+}
+
+func updateAgentMetrics(metrics AgentMetrics, stage StageResult) AgentMetrics {
+	metrics.TotalRuns++
+	metrics.LastStatus = stage.Status
+	metrics.LastRunAt = stage.Ended
+	if stage.Status == "success" {
+		metrics.SuccessRuns++
+		metrics.LastError = ""
+	} else {
+		metrics.FailureRuns++
+		metrics.LastError = stage.Error
+	}
+	if metrics.TotalRuns > 0 {
+		metrics.SuccessRate = float64(metrics.SuccessRuns) / float64(metrics.TotalRuns)
+	}
+	return metrics
 }
 
 func (r AgentRegistry) load() (agentRegistryFile, error) {

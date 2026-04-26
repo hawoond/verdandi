@@ -112,6 +112,9 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	}
 	result.Analyzer = analysis.Source
 	result.FallbackReason = analysis.FallbackReason
+	if err := t.agents.RecordStageResults(result.Stages); err != nil {
+		return nil, err
+	}
 
 	status := "success"
 	if result.Summary.Failed > 0 {

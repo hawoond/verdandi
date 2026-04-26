@@ -513,6 +513,85 @@ func TestToolListAgentsReturnsPersistedContracts(t *testing.T) {
 	}
 }
 
+func TestToolRecordsSuccessfulAgentPerformance(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "성공하는 접근성 UI 에이전트", AgentContract{
+		Name: "SuccessfulAccessibilityAgent",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility"},
+		},
+	}))
+	if _, err := tool.Run("성공하는 접근성 UI 에이전트"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	listed, err := tool.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents failed: %v", err)
+	}
+	agents := listed["agents"].([]AgentContract)
+	if len(agents) != 1 {
+		t.Fatalf("expected one agent, got %#v", agents)
+	}
+	metrics := agents[0].Metrics
+	if metrics.TotalRuns != 1 || metrics.SuccessRuns != 1 || metrics.FailureRuns != 0 {
+		t.Fatalf("unexpected success metrics: %#v", metrics)
+	}
+	if metrics.SuccessRate != 1 || metrics.LastStatus != "success" || metrics.LastRunAt.IsZero() {
+		t.Fatalf("expected success status and timestamp, got %#v", metrics)
+	}
+}
+
+func TestToolRecordsFailedAgentPerformance(t *testing.T) {
+	dataDir := t.TempDir()
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan("테스트만 실행", []StageDef{{
+		Stage:   "tester",
+		Keyword: "llm",
+		Agent: &AgentContract{
+			Name: "FailureAwareTesterAgent",
+			Spec: AgentSpec{
+				Role:         "test engineer",
+				Capabilities: []string{"validation"},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Intent:     IntentResult{Category: IntentGeneral, Confidence: 0.7},
+		Complexity: ComplexityResult{Level: "LOW", Score: 1},
+		Plan:       plan,
+		Source:     AnalyzerLLM,
+	}})
+
+	run, err := tool.Run("테스트만 실행")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if run["status"] != "error" {
+		t.Fatalf("expected failed run status, got %#v", run)
+	}
+
+	listed, err := tool.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents failed: %v", err)
+	}
+	agents := listed["agents"].([]AgentContract)
+	if len(agents) != 1 {
+		t.Fatalf("expected one agent, got %#v", agents)
+	}
+	metrics := agents[0].Metrics
+	if metrics.TotalRuns != 1 || metrics.SuccessRuns != 0 || metrics.FailureRuns != 1 {
+		t.Fatalf("unexpected failure metrics: %#v", metrics)
+	}
+	if metrics.SuccessRate != 0 || metrics.LastStatus != "error" || metrics.LastError == "" {
+		t.Fatalf("expected failure status and error, got %#v", metrics)
+	}
+}
+
 func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 	dataDir := t.TempDir()
 	userMessages := []string{}
@@ -558,6 +637,9 @@ func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 	}
 	if !strings.Contains(userMessages[1], "SavedAccessibilityAgent") {
 		t.Fatalf("expected second LLM request to include refreshed agent context, got %s", userMessages[1])
+	}
+	if !strings.Contains(userMessages[1], "successRate") {
+		t.Fatalf("expected second LLM request to include agent performance metrics, got %s", userMessages[1])
 	}
 }
 
