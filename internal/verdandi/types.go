@@ -50,9 +50,10 @@ type AgentSpec struct {
 }
 
 type StageDef struct {
-	Stage   string `json:"stage"`
-	Keyword string `json:"keyword"`
-	Order   int    `json:"order"`
+	Stage   string         `json:"stage"`
+	Keyword string         `json:"keyword"`
+	Order   int            `json:"order"`
+	Agent   *AgentContract `json:"agent,omitempty"`
 }
 
 type Edge struct {

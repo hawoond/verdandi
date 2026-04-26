@@ -66,3 +66,38 @@ func TestNormalizePlanOrdersStagesAndAddsTester(t *testing.T) {
 		t.Fatalf("stages mismatch: got %#v want %#v", got, want)
 	}
 }
+
+func TestNormalizePlanPreservesDynamicAgentContract(t *testing.T) {
+	orchestrator := NewOrchestrator(t.TempDir())
+	plan, err := orchestrator.NormalizePlan("접근성 좋은 계산기 앱 구현", []StageDef{
+		{
+			Stage:   "code-writer",
+			Keyword: "llm",
+			Agent: &AgentContract{
+				Name:        "AccessibilityFocusedFrontendAgent",
+				Description: "Builds UI code with accessibility checks.",
+				Spec: AgentSpec{
+					Role:         "frontend accessibility engineer",
+					Capabilities: []string{"ui-implementation", "accessibility", "validation"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+
+	if plan.Stages[0].Agent == nil {
+		t.Fatalf("expected dynamic agent contract in first stage: %#v", plan.Stages[0])
+	}
+	agent := plan.Stages[0].Agent
+	if agent.Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("unexpected agent name: %#v", agent)
+	}
+	if agent.Command != "verdandi" {
+		t.Fatalf("expected default verdandi command, got %#v", agent.Command)
+	}
+	if agent.Inputs["request"] != "접근성 좋은 계산기 앱 구현" {
+		t.Fatalf("expected request input, got %#v", agent.Inputs)
+	}
+}
