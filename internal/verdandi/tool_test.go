@@ -644,6 +644,92 @@ func TestToolListAgentsIncludesLifecycleRecommendations(t *testing.T) {
 	}
 }
 
+func TestToolRunAppliesLifecycleRecommendationWhenPolicyIsImplicit(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAgentRegistry(filepath.Join(dataDir, "agents.json"))
+	existing := AgentContract{
+		Name:        "UnstableAccessibilityAgent",
+		Description: "Builds accessible interfaces.",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility", "ui-implementation"},
+		},
+	}
+	if err := registry.RecordStageResults([]StageResult{
+		{Stage: "code-writer", Status: "error", Error: "compile failed", Agent: &existing},
+		{Stage: "code-writer", Status: "error", Error: "compile failed", Agent: &existing},
+	}); err != nil {
+		t.Fatalf("record stage results failed: %v", err)
+	}
+
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "접근성 UI 에이전트 재구성", AgentContract{
+		Name:        "ModernAccessibilityAgent",
+		Description: "Builds accessible interfaces.",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility", "ui-implementation", "design-system"},
+		},
+	}))
+	run, err := tool.Run("접근성 UI 에이전트 재구성")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	status, err := tool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyRewrite {
+		t.Fatalf("expected rewrite recommendation to be applied, got %#v", stage.AgentDecision)
+	}
+	if stage.Agent == nil || stage.Agent.Name != "ModernAccessibilityAgent" {
+		t.Fatalf("expected rewritten candidate to be selected, got %#v", stage.Agent)
+	}
+}
+
+func TestToolRunOptionsOverrideLifecycleRecommendation(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAgentRegistry(filepath.Join(dataDir, "agents.json"))
+	existing := AgentContract{
+		Name:        "UnstableAnalysisAgent",
+		Description: "Analyzes product metrics.",
+		Spec: AgentSpec{
+			Role:         "data analyst",
+			Capabilities: []string{"data-analysis"},
+		},
+	}
+	if err := registry.RecordStageResults([]StageResult{
+		{Stage: "code-writer", Status: "error", Error: "analysis failed", Agent: &existing},
+		{Stage: "code-writer", Status: "error", Error: "analysis failed", Agent: &existing},
+	}); err != nil {
+		t.Fatalf("record stage results failed: %v", err)
+	}
+
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "별도 분석 에이전트 생성", AgentContract{
+		Name:        "ExperimentAnalysisAgent",
+		Description: "Analyzes product metrics.",
+		Spec: AgentSpec{
+			Role:         "data analyst",
+			Capabilities: []string{"data-analysis", "experimentation"},
+		},
+	}))
+	run, err := tool.Run("별도 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	status, err := tool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicySeparate {
+		t.Fatalf("expected explicit separate policy to override recommendation, got %#v", stage.AgentDecision)
+	}
+	if stage.Agent == nil || stage.Agent.Name != "ExperimentAnalysisAgent" {
+		t.Fatalf("expected separate candidate to be selected, got %#v", stage.Agent)
+	}
+}
+
 func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 	dataDir := t.TempDir()
 	userMessages := []string{}
