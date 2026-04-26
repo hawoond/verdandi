@@ -2,6 +2,10 @@ const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const runSelect = document.getElementById("runSelect");
 const replayButton = document.getElementById("replayButton");
+const playPauseButton = document.getElementById("playPauseButton");
+const stepButton = document.getElementById("stepButton");
+const speedRange = document.getElementById("speedRange");
+const eventCounter = document.getElementById("eventCounter");
 const timeline = document.getElementById("timeline");
 const inspector = document.getElementById("inspector");
 
@@ -25,6 +29,10 @@ const agents = new Map();
 let events = [];
 let replayTimer = null;
 let animationFrame = null;
+let replayIndex = 0;
+let isPlaying = false;
+let activeStage = "";
+let decisionLinks = [];
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -48,6 +56,7 @@ function draw(now) {
   ctx.clearRect(0, 0, rect.width, rect.height);
   drawGround(rect);
   Object.entries(zones).forEach(([stage, zone]) => drawZone(stage, zone));
+  drawDecisionLinks(now);
   agents.forEach((agent) => drawAgent(agent, now));
 }
 
@@ -75,14 +84,40 @@ function drawZone(stage, zone) {
   ctx.fillStyle = zone.color;
   roundRect(point.x - 92, point.y - 52, 184, 104, 8);
   ctx.fill();
-  ctx.strokeStyle = "rgba(23, 32, 26, 0.28)";
+  ctx.strokeStyle = stage === activeStage ? "#2e6f50" : "rgba(23, 32, 26, 0.28)";
+  ctx.lineWidth = stage === activeStage ? 5 : 1;
   ctx.stroke();
+  ctx.lineWidth = 1;
   ctx.fillStyle = "#17201a";
   ctx.font = "700 14px system-ui";
   ctx.textAlign = "center";
   ctx.fillText(zone.label, point.x, point.y + 4);
   ctx.font = "12px system-ui";
   ctx.fillText(stage, point.x, point.y + 24);
+}
+
+function drawDecisionLinks(now) {
+  decisionLinks = decisionLinks.filter((link) => now - link.createdAt < 2600);
+  decisionLinks.forEach((link) => {
+    const fromAgent = agents.get(link.from);
+    const toAgent = agents.get(link.to);
+    if (!fromAgent || !toAgent) {
+      return;
+    }
+    const from = scalePoint(fromAgent.position);
+    const to = scalePoint(toAgent.position);
+    const age = now - link.createdAt;
+    const alpha = Math.max(0, 1 - age / 2600);
+    ctx.save();
+    ctx.strokeStyle = `rgba(46, 111, 80, ${alpha})`;
+    ctx.lineWidth = 4;
+    ctx.setLineDash([12, 8]);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.quadraticCurveTo((from.x + to.x) / 2, Math.min(from.y, to.y) - 80, to.x, to.y);
+    ctx.stroke();
+    ctx.restore();
+  });
 }
 
 function drawAgent(agent, now) {
@@ -227,26 +262,69 @@ async function loadEvents(runId) {
   const payload = await response.json();
   events = payload.events || [];
   agents.clear();
+  replayIndex = 0;
+  isPlaying = false;
+  activeStage = "";
+  decisionLinks = [];
   timeline.innerHTML = "";
-  draw();
+  updatePlaybackControls();
+  draw(performance.now());
 }
 
 function replay() {
   clearInterval(replayTimer);
   agents.clear();
+  replayIndex = 0;
+  isPlaying = true;
+  activeStage = "";
+  decisionLinks = [];
   timeline.innerHTML = "";
-  let index = 0;
-  replayTimer = setInterval(() => {
-    if (index >= events.length) {
-      clearInterval(replayTimer);
-      return;
-    }
-    applyEvent(events[index]);
-    index += 1;
-  }, 1100);
+  updatePlaybackControls();
+  replayTimer = setInterval(stepForward, playbackDelay());
+}
+
+function stepForward() {
+  if (replayIndex >= events.length) {
+    pausePlayback();
+    return;
+  }
+  applyEvent(events[replayIndex]);
+  replayIndex += 1;
+  updatePlaybackControls();
+  if (replayIndex >= events.length) {
+    pausePlayback();
+  }
+}
+
+function pausePlayback() {
+  clearInterval(replayTimer);
+  replayTimer = null;
+  isPlaying = false;
+  updatePlaybackControls();
+}
+
+function resumePlayback() {
+  if (isPlaying || replayIndex >= events.length) {
+    return;
+  }
+  isPlaying = true;
+  updatePlaybackControls();
+  replayTimer = setInterval(stepForward, playbackDelay());
+}
+
+function playbackDelay() {
+  return Number(speedRange.value);
+}
+
+function updatePlaybackControls() {
+  playPauseButton.textContent = isPlaying ? "Pause" : "Play";
+  eventCounter.textContent = `${Math.min(replayIndex, events.length)} / ${events.length} events`;
 }
 
 function applyEvent(event) {
+  if (event.stage) {
+    activeStage = event.stage;
+  }
   if (event.agent) {
     const now = performance.now();
     const current = agents.get(event.agent.name) || {
@@ -280,9 +358,24 @@ function applyEvent(event) {
     current.metrics = event.metrics;
     current.decision = event.decision;
     agents.set(event.agent.name, current);
+    registerDecisionLink(event, current);
     renderInspector(current);
   }
   appendTimeline(event);
+}
+
+function registerDecisionLink(event, current) {
+  if (!event.decision || !event.decision.existingAgentName) {
+    return;
+  }
+  if (!agents.has(event.decision.existingAgentName)) {
+    return;
+  }
+  decisionLinks.push({
+    from: event.decision.existingAgentName,
+    to: current.name,
+    createdAt: performance.now(),
+  });
 }
 
 function speechForEvent(event) {
@@ -328,6 +421,26 @@ function renderInspector(agent) {
 
 runSelect.addEventListener("change", () => loadEvents(runSelect.value));
 replayButton.addEventListener("click", replay);
+playPauseButton.addEventListener("click", () => {
+  if (isPlaying) {
+    pausePlayback();
+  } else {
+    resumePlayback();
+  }
+});
+stepButton.addEventListener("click", () => {
+  if (isPlaying) {
+    pausePlayback();
+  }
+  stepForward();
+});
+speedRange.addEventListener("input", () => {
+  if (!isPlaying) {
+    return;
+  }
+  clearInterval(replayTimer);
+  replayTimer = setInterval(stepForward, playbackDelay());
+});
 window.addEventListener("resize", resizeCanvas);
 
 resizeCanvas();
