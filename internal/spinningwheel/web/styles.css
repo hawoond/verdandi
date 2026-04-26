@@ -11,7 +11,8 @@ body {
 }
 
 button,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -70,6 +71,35 @@ button {
   background: #2e6f50;
   color: #fffaf0;
   font-weight: 700;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.controls button {
+  min-width: 0;
+}
+
+.speed-control {
+  display: grid;
+  gap: 8px;
+  color: #38443b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.speed-control input {
+  width: 100%;
+  accent-color: #2e6f50;
+}
+
+.event-counter {
+  margin: 0;
+  color: #5d695f;
+  font-size: 13px;
 }
 
 .inspector {

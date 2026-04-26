@@ -102,6 +102,11 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 	if !strings.Contains(string(body), "Spinning Wheel") {
 		t.Fatalf("expected Spinning Wheel UI, got %s", string(body))
 	}
+	for _, expected := range []string{"playPauseButton", "stepButton", "speedRange", "eventCounter"} {
+		if !strings.Contains(string(body), expected) {
+			t.Fatalf("expected UI shell to contain %q", expected)
+		}
+	}
 
 	assetResponse, err := http.Get(server.URL + "/app.js")
 	if err != nil {
@@ -116,7 +121,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 		t.Fatalf("read app asset: %v", err)
 	}
 	app := string(assetBody)
-	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent"} {
+	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent", "drawDecisionLinks", "activeStage", "stepForward", "playbackDelay"} {
 		if !strings.Contains(app, expected) {
 			t.Fatalf("expected app asset to contain %q", expected)
 		}

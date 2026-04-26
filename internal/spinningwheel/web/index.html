@@ -14,7 +14,16 @@
           <h1>Spinning Wheel</h1>
         </div>
         <select id="runSelect" aria-label="Run"></select>
-        <button id="replayButton" type="button">Replay</button>
+        <div class="controls">
+          <button id="replayButton" type="button">Replay</button>
+          <button id="playPauseButton" type="button">Pause</button>
+          <button id="stepButton" type="button">Step</button>
+        </div>
+        <label class="speed-control" for="speedRange">
+          <span>Speed</span>
+          <input id="speedRange" type="range" min="350" max="1800" step="50" value="1100" />
+        </label>
+        <p id="eventCounter" class="event-counter">0 / 0 events</p>
         <section class="inspector" id="inspector">
           <h2>Agent</h2>
           <p>Select a run to watch the workspace come alive.</p>
