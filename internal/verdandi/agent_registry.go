@@ -39,7 +39,7 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 		return Plan{}, err
 	}
 
-	defaultPolicy := agentPolicy(options)
+	optionPolicy, hasOptionPolicy := explicitAgentPolicy(options)
 	changed := false
 	for index, stage := range plan.Stages {
 		if stage.Agent == nil {
@@ -47,17 +47,9 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 		}
 
 		candidate := cloneAgent(*stage.Agent)
-		policy := defaultPolicy
-		if candidatePolicy := agentPolicyFromMetadata(candidate.Metadata); candidatePolicy != "" {
-			policy = candidatePolicy
-		}
-		if stage.AgentDecision != nil && isAgentPolicy(stage.AgentDecision.Action) {
-			policy = stage.AgentDecision.Action
-		}
-
 		existingIndex, similarity := findAgentForDecision(store.Agents, candidate, stage.AgentDecision)
 		hasSimilar := existingIndex >= 0
-		action := policy
+		action := resolveAgentPolicy(optionPolicy, hasOptionPolicy, stage, candidate, store.Agents, existingIndex)
 		if !hasSimilar {
 			action = AgentPolicySeparate
 		}
@@ -171,6 +163,25 @@ func findAgentForDecision(agents []AgentContract, candidate AgentContract, decis
 	return findSimilarAgent(agents, candidate)
 }
 
+func resolveAgentPolicy(optionPolicy string, hasOptionPolicy bool, stage StageDef, candidate AgentContract, agents []AgentContract, existingIndex int) string {
+	if hasOptionPolicy {
+		return optionPolicy
+	}
+	if stage.AgentDecision != nil && isAgentPolicy(stage.AgentDecision.Action) {
+		return stage.AgentDecision.Action
+	}
+	if candidatePolicy := agentPolicyFromMetadata(candidate.Metadata); candidatePolicy != "" {
+		return candidatePolicy
+	}
+	if existingIndex >= 0 {
+		recommendation := recommendAgentLifecycle(agents[existingIndex].Metrics)
+		if recommendation.Action == AgentPolicyReuseEnhance || recommendation.Action == AgentPolicyRewrite {
+			return recommendation.Action
+		}
+	}
+	return AgentPolicyReuseEnhance
+}
+
 func findAgentByName(agents []AgentContract, name string) int {
 	for index, agent := range agents {
 		if strings.EqualFold(agent.Name, name) {
@@ -237,14 +248,21 @@ func (r AgentRegistry) write(store agentRegistryFile) error {
 }
 
 func agentPolicy(options map[string]any) string {
+	if value, ok := explicitAgentPolicy(options); ok {
+		return value
+	}
+	return AgentPolicyReuseEnhance
+}
+
+func explicitAgentPolicy(options map[string]any) (string, bool) {
 	if options != nil {
 		for _, key := range []string{"agentPolicy", "agentLifecyclePolicy"} {
 			if value, ok := options[key].(string); ok && isAgentPolicy(value) {
-				return value
+				return value, true
 			}
 		}
 	}
-	return AgentPolicyReuseEnhance
+	return "", false
 }
 
 func agentPolicyFromMetadata(metadata map[string]any) string {
