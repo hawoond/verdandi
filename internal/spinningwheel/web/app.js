@@ -24,6 +24,7 @@ const animalGlyphs = {
 const agents = new Map();
 let events = [];
 let replayTimer = null;
+let animationFrame = null;
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -31,7 +32,7 @@ function resizeCanvas() {
   canvas.width = Math.max(900, Math.floor(rect.width * ratio));
   canvas.height = Math.max(540, Math.floor(rect.height * ratio));
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  draw();
+  draw(performance.now());
 }
 
 function scalePoint(point) {
@@ -42,12 +43,12 @@ function scalePoint(point) {
   };
 }
 
-function draw() {
+function draw(now) {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
   drawGround(rect);
   Object.entries(zones).forEach(([stage, zone]) => drawZone(stage, zone));
-  agents.forEach(drawAgent);
+  agents.forEach((agent) => drawAgent(agent, now));
 }
 
 function drawGround(rect) {
@@ -84,22 +85,53 @@ function drawZone(stage, zone) {
   ctx.fillText(stage, point.x, point.y + 24);
 }
 
-function drawAgent(agent) {
+function drawAgent(agent, now) {
   const point = scalePoint(agent.position);
+  const target = scalePoint(agent.targetPosition || agent.position);
+  const spawnAge = now - agent.spawnedAt;
+  const spawnScale = Math.min(1, easeOutBack(Math.max(0, spawnAge) / 520));
+  const moving = agent.moveStartedAt && now - agent.moveStartedAt < agent.moveDuration;
+
+  if (moving) {
+    ctx.save();
+    ctx.setLineDash([8, 8]);
+    ctx.strokeStyle = "rgba(23, 32, 26, 0.28)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(point.x, point.y);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (spawnAge < 900) {
+    const ringProgress = spawnAge / 900;
+    ctx.strokeStyle = `rgba(46, 111, 80, ${1 - ringProgress})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 30 + ringProgress * 28, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.scale(spawnScale, spawnScale);
   ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
   ctx.beginPath();
-  ctx.ellipse(point.x, point.y + 32, 32, 10, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 32, 32, 10, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#fffaf0";
   ctx.beginPath();
-  ctx.arc(point.x, point.y, 32, 0, Math.PI * 2);
+  ctx.arc(0, 0, 32, 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = agent.status === "error" ? "#c24137" : "#2e6f50";
   ctx.lineWidth = 4;
   ctx.stroke();
   ctx.font = "32px serif";
   ctx.textAlign = "center";
-  ctx.fillText(animalGlyphs[agent.avatar] || "🐾", point.x, point.y + 11);
+  ctx.fillText(animalGlyphs[agent.avatar] || "🐾", 0, 11);
+  ctx.restore();
+
   ctx.fillStyle = "#17201a";
   ctx.font = "700 12px system-ui";
   ctx.fillText(agent.name, point.x, point.y + 54);
@@ -113,6 +145,53 @@ function drawAgent(agent) {
     ctx.font = "12px system-ui";
     ctx.fillText(agent.message.slice(0, 22), point.x, point.y - 54);
   }
+}
+
+function animationLoop(now) {
+  updateAgentPositions(now);
+  draw(now);
+  animationFrame = requestAnimationFrame(animationLoop);
+}
+
+function updateAgentPositions(now) {
+  agents.forEach((agent) => {
+    if (!agent.moveStartedAt || !agent.startPosition || !agent.targetPosition) {
+      return;
+    }
+    const progress = Math.min(1, (now - agent.moveStartedAt) / agent.moveDuration);
+    const eased = easeInOutCubic(progress);
+    agent.position = {
+      x: lerp(agent.startPosition.x, agent.targetPosition.x, eased),
+      y: lerp(agent.startPosition.y, agent.targetPosition.y, eased),
+    };
+    if (progress >= 1) {
+      agent.moveStartedAt = 0;
+      agent.startPosition = null;
+      agent.position = { ...agent.targetPosition };
+    }
+  });
+}
+
+function moveAgentTo(agent, targetPosition, now) {
+  agent.startPosition = { ...agent.position };
+  agent.targetPosition = { ...targetPosition };
+  agent.moveStartedAt = now;
+  agent.moveDuration = 850;
+}
+
+function easeInOutCubic(value) {
+  return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
+}
+
+function easeOutBack(value) {
+  const clamped = Math.min(1, value);
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(clamped - 1, 3) + c1 * Math.pow(clamped - 1, 2);
+}
+
+function lerp(start, end, progress) {
+  return start + (end - start) * progress;
 }
 
 function roundRect(x, y, width, height, radius) {
@@ -166,22 +245,34 @@ function replay() {
 
 function applyEvent(event) {
   if (event.agent) {
+    const now = performance.now();
     const current = agents.get(event.agent.name) || {
       name: event.agent.name,
       avatar: event.agent.avatar.kind,
-      position: { x: 90 + agents.size * 54, y: 90 },
+      position: spawnPosition(agents.size),
+      targetPosition: spawnPosition(agents.size),
+      startPosition: null,
+      moveStartedAt: 0,
+      moveDuration: 0,
+      spawnedAt: now,
       status: "active",
-      message: "",
+      message: "created",
     };
     const zone = zones[event.stage];
     if (zone) {
-      current.position = {
+      moveAgentTo(current, {
         x: zone.x + ((agents.size % 3) - 1) * 42,
         y: zone.y + 8 + Math.floor(agents.size / 3) * 36,
-      };
+      }, now);
+    }
+    if (event.type === "agent-spawned") {
+      current.spawnedAt = now;
+      current.message = "created";
     }
     current.status = event.status || current.status;
-    current.message = event.message || event.type;
+    if (event.type !== "agent-spawned") {
+      current.message = event.message || event.type;
+    }
     current.role = event.agent.role;
     current.metrics = event.metrics;
     current.decision = event.decision;
@@ -189,7 +280,10 @@ function applyEvent(event) {
     renderInspector(current);
   }
   appendTimeline(event);
-  draw();
+}
+
+function spawnPosition(index) {
+  return { x: 105 + index * 56, y: 92 };
 }
 
 function appendTimeline(event) {
@@ -216,6 +310,7 @@ replayButton.addEventListener("click", replay);
 window.addEventListener("resize", resizeCanvas);
 
 resizeCanvas();
+animationFrame = requestAnimationFrame(animationLoop);
 loadRuns().then(replay).catch((error) => {
   inspector.innerHTML = `<h2>Spinning Wheel</h2><p>${error.message}</p>`;
 });

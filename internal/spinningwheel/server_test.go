@@ -111,4 +111,14 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 	if assetResponse.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from app asset, got %s", assetResponse.Status)
 	}
+	assetBody, err := io.ReadAll(assetResponse.Body)
+	if err != nil {
+		t.Fatalf("read app asset: %v", err)
+	}
+	app := string(assetBody)
+	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned"} {
+		if !strings.Contains(app, expected) {
+			t.Fatalf("expected app asset to contain %q", expected)
+		}
+	}
 }
