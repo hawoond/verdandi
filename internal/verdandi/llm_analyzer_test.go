@@ -77,6 +77,9 @@ func TestLLMAnalyzerFallsBackWhenOutputIsInvalid(t *testing.T) {
 	if result.Source != AnalyzerKeyword {
 		t.Fatalf("expected keyword fallback source, got %s", result.Source)
 	}
+	if result.FallbackReason == "" {
+		t.Fatalf("expected fallback reason")
+	}
 	if result.Plan.StageCount != 4 {
 		t.Fatalf("expected keyword fallback plan, got %#v", result.Plan)
 	}

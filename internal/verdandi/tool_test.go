@@ -197,3 +197,42 @@ func TestToolRunUsesAnalyzerPlan(t *testing.T) {
 		t.Fatalf("expected analyzer in status, got %#v", status["analyzer"])
 	}
 }
+
+func TestToolPropagatesFallbackReason(t *testing.T) {
+	dataDir := t.TempDir()
+	orchestrator := NewOrchestrator(dataDir)
+	plan := orchestrator.ParseRequest("기획 구현 테스트 문서화")
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:         IntentResult{Category: IntentPlanner, Confidence: 0.2},
+			Complexity:     ComplexityResult{Level: "LOW", Score: 0},
+			Plan:           plan,
+			Source:         AnalyzerKeyword,
+			FallbackReason: "llm analyzer returned invalid stage",
+		},
+	})
+
+	analyzed, err := tool.Analyze("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	if analyzed["fallbackReason"] != "llm analyzer returned invalid stage" {
+		t.Fatalf("expected analyze fallback reason, got %#v", analyzed["fallbackReason"])
+	}
+
+	run, err := tool.Run("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if run["fallbackReason"] != "llm analyzer returned invalid stage" {
+		t.Fatalf("expected run fallback reason, got %#v", run["fallbackReason"])
+	}
+
+	status, err := tool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	if status["fallbackReason"] != "llm analyzer returned invalid stage" {
+		t.Fatalf("expected status fallback reason, got %#v", status["fallbackReason"])
+	}
+}

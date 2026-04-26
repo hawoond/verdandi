@@ -42,7 +42,12 @@ func (a LLMAnalyzer) Analyze(request string) (AnalysisResult, error) {
 		return result, nil
 	}
 	if a.fallback != nil {
-		return a.fallback.Analyze(request)
+		fallback, fallbackErr := a.fallback.Analyze(request)
+		if fallbackErr != nil {
+			return AnalysisResult{}, fallbackErr
+		}
+		fallback.FallbackReason = err.Error()
+		return fallback, nil
 	}
 	return AnalysisResult{}, err
 }

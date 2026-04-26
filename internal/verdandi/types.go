@@ -105,13 +105,14 @@ type Summary struct {
 }
 
 type ExecutionResult struct {
-	Request     string        `json:"request"`
-	Plan        Plan          `json:"plan"`
-	Analyzer    string        `json:"analyzer,omitempty"`
-	Stages      []StageResult `json:"stages"`
-	OutputDir   string        `json:"outputDir,omitempty"`
-	Summary     Summary       `json:"summary"`
-	CompletedAt time.Time     `json:"completed_at"`
+	Request        string        `json:"request"`
+	Plan           Plan          `json:"plan"`
+	Analyzer       string        `json:"analyzer,omitempty"`
+	FallbackReason string        `json:"fallbackReason,omitempty"`
+	Stages         []StageResult `json:"stages"`
+	OutputDir      string        `json:"outputDir,omitempty"`
+	Summary        Summary       `json:"summary"`
+	CompletedAt    time.Time     `json:"completed_at"`
 }
 
 type FileEntry struct {
@@ -129,13 +130,14 @@ type FileInfo struct {
 }
 
 type RunRecord struct {
-	RunID       string        `json:"runId"`
-	Status      string        `json:"status"`
-	Request     string        `json:"request"`
-	Analyzer    string        `json:"analyzer,omitempty"`
-	OutputDir   string        `json:"outputDir,omitempty"`
-	Summary     Summary       `json:"summary"`
-	Stages      []StageResult `json:"stages"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CompletedAt time.Time     `json:"completed_at"`
+	RunID          string        `json:"runId"`
+	Status         string        `json:"status"`
+	Request        string        `json:"request"`
+	Analyzer       string        `json:"analyzer,omitempty"`
+	FallbackReason string        `json:"fallbackReason,omitempty"`
+	OutputDir      string        `json:"outputDir,omitempty"`
+	Summary        Summary       `json:"summary"`
+	Stages         []StageResult `json:"stages"`
+	CreatedAt      time.Time     `json:"created_at"`
+	CompletedAt    time.Time     `json:"completed_at"`
 }
