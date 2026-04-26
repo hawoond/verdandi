@@ -115,9 +115,16 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 		return AnalysisResult{}, fmt.Errorf("llm analyzer returned empty content")
 	}
 
-	var proposed llmPlanResponse
-	if err := json.Unmarshal([]byte(decoded.Choices[0].Message.Content), &proposed); err != nil {
+	content, err := extractJSONObject(decoded.Choices[0].Message.Content)
+	if err != nil {
 		return AnalysisResult{}, err
+	}
+	var proposed llmPlanResponse
+	if err := json.Unmarshal([]byte(content), &proposed); err != nil {
+		return AnalysisResult{}, err
+	}
+	if len(proposed.Stages) == 0 {
+		return AnalysisResult{}, fmt.Errorf("llm analyzer response missing stages")
 	}
 	orchestrator := NewOrchestrator("")
 	plan, err := orchestrator.NormalizePlan(request, proposed.Stages)
@@ -141,6 +148,57 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 
 func llmAnalyzerSystemPrompt() string {
 	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages.`
+}
+
+func extractJSONObject(content string) (string, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", fmt.Errorf("llm analyzer returned empty content")
+	}
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) >= 3 {
+			lines = lines[1 : len(lines)-1]
+			content = strings.TrimSpace(strings.Join(lines, "\n"))
+		}
+	}
+
+	start := strings.Index(content, "{")
+	if start < 0 {
+		return "", fmt.Errorf("llm analyzer response missing JSON object")
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(content[start : i+1]), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("llm analyzer response has incomplete JSON object")
 }
 
 func normalizeIntent(intent string) string {

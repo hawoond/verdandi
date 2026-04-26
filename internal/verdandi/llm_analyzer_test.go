@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -83,4 +84,74 @@ func TestLLMAnalyzerFallsBackWhenOutputIsInvalid(t *testing.T) {
 	if result.Plan.StageCount != 4 {
 		t.Fatalf("expected keyword fallback plan, got %#v", result.Plan)
 	}
+}
+
+func TestLLMAnalyzerParsesFencedJSONContent(t *testing.T) {
+	content := "```json\n" +
+		`{"intent":"planner","confidence":0.8,"keywords":["기획"],"complexity":{"level":"LOW","score":1},"stages":[{"stage":"planner","keyword":"llm"}]}` +
+		"\n```"
+	result := analyzeWithLLMContent(t, content, "기획해줘")
+
+	if result.Source != AnalyzerLLM {
+		t.Fatalf("expected llm source, got %s", result.Source)
+	}
+	if result.Intent.Category != IntentPlanner {
+		t.Fatalf("expected planner intent, got %#v", result.Intent)
+	}
+	if result.Plan.StageCount != 1 || result.Plan.Stages[0].Stage != "planner" {
+		t.Fatalf("expected planner-only plan, got %#v", result.Plan)
+	}
+}
+
+func TestLLMAnalyzerExtractsJSONFromMixedContent(t *testing.T) {
+	content := `Here is the plan: {"intent":"documenter","confidence":0.7,"keywords":["문서"],"complexity":{"level":"LOW","score":1},"stages":[{"stage":"documenter","keyword":"llm"}]}`
+	result := analyzeWithLLMContent(t, content, "문서 작성")
+
+	if result.Source != AnalyzerLLM {
+		t.Fatalf("expected llm source, got %s", result.Source)
+	}
+	if result.Intent.Category != IntentDocumenter {
+		t.Fatalf("expected documenter intent, got %#v", result.Intent)
+	}
+	if result.Plan.StageCount != 1 || result.Plan.Stages[0].Stage != "documenter" {
+		t.Fatalf("expected documenter-only plan, got %#v", result.Plan)
+	}
+}
+
+func TestLLMAnalyzerFallsBackWithSpecificReasonWhenStagesMissing(t *testing.T) {
+	result := analyzeWithLLMContent(t, `{"intent":"planner","confidence":0.8,"keywords":["기획"],"complexity":{"level":"LOW","score":1}}`, "기획 구현 테스트 문서화")
+
+	if result.Source != AnalyzerKeyword {
+		t.Fatalf("expected keyword fallback source, got %s", result.Source)
+	}
+	if !strings.Contains(result.FallbackReason, "missing stages") {
+		t.Fatalf("expected missing stages fallback reason, got %q", result.FallbackReason)
+	}
+}
+
+func analyzeWithLLMContent(t *testing.T, content string, request string) AnalysisResult {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": content,
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := NewLLMAnalyzer(LLMAnalyzerConfig{
+		Endpoint: server.URL,
+		Model:    "test-model",
+		APIKey:   "test-key",
+	}, NewKeywordAnalyzer(NewOrchestrator(t.TempDir())))
+
+	result, err := analyzer.Analyze(request)
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	return result
 }
