@@ -6,6 +6,8 @@ const playPauseButton = document.getElementById("playPauseButton");
 const stepButton = document.getElementById("stepButton");
 const speedRange = document.getElementById("speedRange");
 const eventCounter = document.getElementById("eventCounter");
+const agentRoster = document.getElementById("agentRoster");
+const conversationLog = document.getElementById("conversationLog");
 const timeline = document.getElementById("timeline");
 const inspector = document.getElementById("inspector");
 
@@ -32,7 +34,9 @@ let animationFrame = null;
 let replayIndex = 0;
 let isPlaying = false;
 let activeStage = "";
+let activeAgentName = "";
 let decisionLinks = [];
+let conversationItems = [];
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -242,6 +246,15 @@ function roundRect(x, y, width, height, radius) {
   ctx.closePath();
 }
 
+function escapeHTML(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 async function loadRuns() {
   const response = await fetch("/api/runs");
   const payload = await response.json();
@@ -265,8 +278,12 @@ async function loadEvents(runId) {
   replayIndex = 0;
   isPlaying = false;
   activeStage = "";
+  activeAgentName = "";
   decisionLinks = [];
+  conversationItems = [];
   timeline.innerHTML = "";
+  conversationLog.innerHTML = "";
+  renderAgentRoster();
   updatePlaybackControls();
   draw(performance.now());
 }
@@ -277,8 +294,12 @@ function replay() {
   replayIndex = 0;
   isPlaying = true;
   activeStage = "";
+  activeAgentName = "";
   decisionLinks = [];
+  conversationItems = [];
   timeline.innerHTML = "";
+  conversationLog.innerHTML = "";
+  renderAgentRoster();
   updatePlaybackControls();
   replayTimer = setInterval(stepForward, playbackDelay());
 }
@@ -357,9 +378,15 @@ function applyEvent(event) {
     current.role = event.agent.role;
     current.metrics = event.metrics;
     current.decision = event.decision;
+    current.lastSpokeAt = now;
+    activeAgentName = current.name;
     agents.set(event.agent.name, current);
     registerDecisionLink(event, current);
+    appendConversation(event, current);
+    renderAgentRoster();
     renderInspector(current);
+  } else {
+    appendConversation(event, null);
   }
   appendTimeline(event);
 }
@@ -403,18 +430,56 @@ function spawnPosition(index) {
 function appendTimeline(event) {
   const item = document.createElement("li");
   const label = event.agent ? event.agent.name : event.runId;
-  item.innerHTML = `<strong>${event.type}</strong><span>${label}</span><p>${event.message || event.stage || ""}</p>`;
+  item.innerHTML = `<strong>${escapeHTML(event.type)}</strong><span>${escapeHTML(label)}</span><p>${escapeHTML(event.message || event.stage || "")}</p>`;
   timeline.appendChild(item);
   timeline.scrollLeft = timeline.scrollWidth;
 }
 
+function appendConversation(event, agent) {
+  const speaker = agent ? agent.name : "Spinning Wheel";
+  const message = agent ? speechForEvent(event) : event.message || event.type;
+  conversationItems.push({
+    speaker,
+    stage: event.stage || "run",
+    type: event.type,
+    message,
+  });
+  conversationItems = conversationItems.slice(-14);
+  renderConversation();
+}
+
+function renderConversation() {
+  conversationLog.innerHTML = conversationItems.map((item) => `
+    <li>
+      <strong>${escapeHTML(item.speaker)}</strong>
+      <span>${escapeHTML(item.stage)} · ${escapeHTML(item.type)}</span>
+      <p>${escapeHTML(item.message)}</p>
+    </li>
+  `).join("");
+  conversationLog.scrollTop = conversationLog.scrollHeight;
+}
+
+function renderAgentRoster() {
+  if (agents.size === 0) {
+    agentRoster.innerHTML = `<li><span>No active agents yet.</span></li>`;
+    return;
+  }
+  agentRoster.innerHTML = Array.from(agents.values()).map((agent) => `
+    <li class="${agent.name === activeAgentName ? "is-active" : ""}">
+      <strong>${animalGlyphs[agent.avatar] || "🐾"} ${escapeHTML(agent.name)}</strong>
+      <span>${escapeHTML(agent.role || "agent")} · ${escapeHTML(agent.status || "active")}</span>
+      <span>${escapeHTML(agent.message || "")}</span>
+    </li>
+  `).join("");
+}
+
 function renderInspector(agent) {
   inspector.innerHTML = `
-    <h2>${agent.name}</h2>
-    <p>${animalGlyphs[agent.avatar] || "🐾"} ${agent.role || "agent"}</p>
-    <p>Status: ${agent.status}</p>
-    <p>${agent.message || ""}</p>
-    ${agent.decision ? `<p>Decision: ${agent.decision.action} (${agent.decision.source || "unknown"})</p>` : ""}
+    <h2>${escapeHTML(agent.name)}</h2>
+    <p>${animalGlyphs[agent.avatar] || "🐾"} ${escapeHTML(agent.role || "agent")}</p>
+    <p>Status: ${escapeHTML(agent.status)}</p>
+    <p>${escapeHTML(agent.message || "")}</p>
+    ${agent.decision ? `<p>Decision: ${escapeHTML(agent.decision.action)} (${escapeHTML(agent.decision.source || "unknown")})</p>` : ""}
     ${agent.metrics ? `<p>Success rate: ${Math.round((agent.metrics.successRate || 0) * 100)}%</p>` : ""}
   `;
 }

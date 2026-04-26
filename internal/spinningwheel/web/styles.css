@@ -102,6 +102,59 @@ button {
   font-size: 13px;
 }
 
+.agent-roster,
+.conversation {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(23, 32, 26, 0.14);
+}
+
+.agent-roster h2,
+.conversation h2 {
+  margin: 0;
+}
+
+.agent-roster ul,
+.conversation ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-roster li,
+.conversation li {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid rgba(23, 32, 26, 0.12);
+  border-radius: 8px;
+  background: #fffaf0;
+  font-size: 12px;
+}
+
+.agent-roster li.is-active {
+  border-color: #2e6f50;
+  box-shadow: inset 4px 0 0 #2e6f50;
+}
+
+.agent-roster strong,
+.conversation strong {
+  font-size: 13px;
+}
+
+.agent-roster span,
+.conversation span {
+  color: #5d695f;
+}
+
+.conversation {
+  max-height: 210px;
+  overflow: auto;
+}
+
 .inspector {
   flex: 1;
   overflow: auto;
