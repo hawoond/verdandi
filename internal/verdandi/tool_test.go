@@ -198,6 +198,44 @@ func TestToolRunWritesSpinningWheelEvents(t *testing.T) {
 	}
 }
 
+func TestToolRunWritesFallbackSpinningWheelAgentsForKeywordStages(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Run("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
+	if err != nil {
+		t.Fatalf("list events failed: %v", err)
+	}
+	agentsByStage := map[string]string{}
+	avatarsByStage := map[string]string{}
+	messages := map[string]bool{}
+	for _, event := range events {
+		if event.Agent != nil {
+			agentsByStage[event.Stage] = event.Agent.Name
+			avatarsByStage[event.Stage] = event.Agent.Avatar.Kind
+		}
+		if event.Message != "" {
+			messages[event.Message] = true
+		}
+	}
+	for _, stage := range []string{"planner", "code-writer", "tester", "documenter"} {
+		if agentsByStage[stage] == "" {
+			t.Fatalf("expected fallback visualization agent for stage %s in %#v", stage, events)
+		}
+	}
+	if !messages["I'm heading to the planning desk."] {
+		t.Fatalf("expected speech bubble message for movement, got %#v", messages)
+	}
+	if avatarsByStage["code-writer"] != "dog" {
+		t.Fatalf("expected code writer fallback avatar to be dog, got %#v", avatarsByStage)
+	}
+}
+
 func TestToolStatusIncludesTypedStageResults(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewTool(Options{DataDir: dataDir})

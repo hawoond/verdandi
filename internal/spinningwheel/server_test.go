@@ -116,7 +116,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 		t.Fatalf("read app asset: %v", err)
 	}
 	app := string(assetBody)
-	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned"} {
+	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent"} {
 		if !strings.Contains(app, expected) {
 			t.Fatalf("expected app asset to contain %q", expected)
 		}

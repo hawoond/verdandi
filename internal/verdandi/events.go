@@ -106,24 +106,22 @@ func eventsForRun(record RunRecord) []VisualizationEvent {
 	}}
 
 	for _, stage := range record.Stages {
-		agent := visualizationAgent(stage.Agent)
-		if agent != nil {
-			events = append(events, VisualizationEvent{
-				RunID:     record.RunID,
-				Type:      EventAgentSpawned,
-				Timestamp: stage.Started,
-				Stage:     stage.Stage,
-				Agent:     agent,
-				Message:   "agent joined the workspace",
-			})
-		}
+		agent := visualizationAgentForStage(stage)
+		events = append(events, VisualizationEvent{
+			RunID:     record.RunID,
+			Type:      EventAgentSpawned,
+			Timestamp: stage.Started,
+			Stage:     stage.Stage,
+			Agent:     agent,
+			Message:   "Hello, I'm ready.",
+		})
 		events = append(events, VisualizationEvent{
 			RunID:     record.RunID,
 			Type:      EventStageStarted,
 			Timestamp: stage.Started,
 			Stage:     stage.Stage,
 			Agent:     agent,
-			Message:   "stage started",
+			Message:   stageMovementMessage(stage.Stage),
 		})
 		if stage.AgentDecision != nil {
 			events = append(events, VisualizationEvent{
@@ -170,6 +168,20 @@ func eventsForRun(record RunRecord) []VisualizationEvent {
 	return events
 }
 
+func visualizationAgentForStage(stage StageResult) *VisualizationAgent {
+	if agent := visualizationAgent(stage.Agent); agent != nil {
+		return agent
+	}
+	contract := AgentContract{
+		Name: fallbackVisualizationAgentName(stage.Stage),
+		Spec: AgentSpec{
+			Role:         stage.Stage,
+			Capabilities: capabilitiesFor(stage.Stage),
+		},
+	}
+	return visualizationAgent(&contract)
+}
+
 func visualizationAgent(agent *AgentContract) *VisualizationAgent {
 	if agent == nil {
 		return nil
@@ -182,9 +194,53 @@ func visualizationAgent(agent *AgentContract) *VisualizationAgent {
 	}
 }
 
+func fallbackVisualizationAgentName(stage string) string {
+	switch stage {
+	case "planner":
+		return "VerdandiPlannerCat"
+	case "code-writer":
+		return "VerdandiCoderDog"
+	case "tester":
+		return "VerdandiTesterRabbit"
+	case "documenter":
+		return "VerdandiDocumenterFox"
+	case "deployer":
+		return "VerdandiDeployPenguin"
+	default:
+		return "VerdandiAgent"
+	}
+}
+
+func stageMovementMessage(stage string) string {
+	switch stage {
+	case "planner":
+		return "I'm heading to the planning desk."
+	case "code-writer":
+		return "Moving to the coding table."
+	case "tester":
+		return "Hopping over to the testing lab."
+	case "documenter":
+		return "Bringing notes to the docs library."
+	case "deployer":
+		return "Waddling toward the deploy gate."
+	default:
+		return "Moving to the next task."
+	}
+}
+
 func animalAvatarKind(agent AgentContract) string {
 	text := strings.ToLower(agent.Name + " " + agent.Spec.Role + " " + strings.Join(agent.Spec.Capabilities, " "))
 	switch {
+	case strings.Contains(text, "cat"):
+		return "cat"
+	case strings.Contains(text, "dog"):
+		return "dog"
+	case strings.Contains(text, "rabbit"):
+		return "rabbit"
+	case strings.Contains(text, "fox"):
+		return "fox"
+	case strings.Contains(text, "penguin"):
+		return "penguin"
 	case strings.Contains(text, "test") || strings.Contains(text, "validation"):
 		return "rabbit"
 	case strings.Contains(text, "document") || strings.Contains(text, "readme"):

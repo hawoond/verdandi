@@ -137,13 +137,16 @@ function drawAgent(agent, now) {
   ctx.fillText(agent.name, point.x, point.y + 54);
   if (agent.message) {
     ctx.fillStyle = "#fffaf0";
-    roundRect(point.x - 76, point.y - 76, 152, 34, 8);
+    roundRect(point.x - 98, point.y - 84, 196, 42, 8);
     ctx.fill();
     ctx.strokeStyle = "rgba(23, 32, 26, 0.18)";
     ctx.stroke();
     ctx.fillStyle = "#17201a";
     ctx.font = "12px system-ui";
-    ctx.fillText(agent.message.slice(0, 22), point.x, point.y - 54);
+    ctx.fillText(agent.message.slice(0, 28), point.x, point.y - 59);
+    if (agent.message.length > 28) {
+      ctx.fillText(agent.message.slice(28, 52), point.x, point.y - 45);
+    }
   }
 }
 
@@ -240,7 +243,7 @@ function replay() {
     }
     applyEvent(events[index]);
     index += 1;
-  }, 650);
+  }, 1100);
 }
 
 function applyEvent(event) {
@@ -259,7 +262,7 @@ function applyEvent(event) {
       message: "created",
     };
     const zone = zones[event.stage];
-    if (zone) {
+    if (zone && event.type !== "agent-spawned") {
       moveAgentTo(current, {
         x: zone.x + ((agents.size % 3) - 1) * 42,
         y: zone.y + 8 + Math.floor(agents.size / 3) * 36,
@@ -267,11 +270,11 @@ function applyEvent(event) {
     }
     if (event.type === "agent-spawned") {
       current.spawnedAt = now;
-      current.message = "created";
+      current.message = event.message || "Hello, I'm ready.";
     }
     current.status = event.status || current.status;
     if (event.type !== "agent-spawned") {
-      current.message = event.message || event.type;
+      current.message = speechForEvent(event);
     }
     current.role = event.agent.role;
     current.metrics = event.metrics;
@@ -280,6 +283,24 @@ function applyEvent(event) {
     renderInspector(current);
   }
   appendTimeline(event);
+}
+
+function speechForEvent(event) {
+  if (event.message) {
+    return event.message;
+  }
+  switch (event.type) {
+    case "stage-started":
+      return `Starting ${event.stage}.`;
+    case "agent-decision":
+      return event.decision ? `Decision: ${event.decision.action}.` : "I made a decision.";
+    case "stage-completed":
+      return event.status === "success" ? "Done. Passing it on." : "I hit a problem.";
+    case "metrics-updated":
+      return "Updated my scorecard.";
+    default:
+      return event.type;
+  }
 }
 
 function spawnPosition(index) {
