@@ -108,7 +108,30 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	result, err := t.orchestrator.ExecutePlan(plan, runOptions)
+	runID := createRunID()
+	createdAt := time.Now().UTC()
+	if err := t.events.Reset(runID); err != nil {
+		return nil, err
+	}
+	if err := t.events.Append(runStartedEvent(runID, "running", request, createdAt)); err != nil {
+		return nil, err
+	}
+
+	var eventErr error
+	result, err := t.orchestrator.ExecutePlanWithObserver(plan, runOptions, func(phase StageLifecyclePhase, stage StageResult) {
+		if eventErr != nil {
+			return
+		}
+		switch phase {
+		case StageLifecycleStarted:
+			eventErr = t.events.AppendMany(stageStartedEvents(runID, stage))
+		case StageLifecycleCompleted:
+			eventErr = t.events.AppendMany(stageCompletedEvents(runID, stage))
+		}
+	})
+	if eventErr != nil {
+		return nil, eventErr
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +147,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	}
 
 	record := RunRecord{
-		RunID:          createRunID(),
+		RunID:          runID,
 		Status:         status,
 		Request:        request,
 		Analyzer:       result.Analyzer,
@@ -132,13 +155,13 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		OutputDir:      result.OutputDir,
 		Summary:        result.Summary,
 		Stages:         result.Stages,
-		CreatedAt:      time.Now().UTC(),
+		CreatedAt:      createdAt,
 		CompletedAt:    result.CompletedAt,
 	}
 	if err := t.store.Save(record); err != nil {
 		return nil, err
 	}
-	if err := t.events.SaveRun(record); err != nil {
+	if err := t.events.Append(runCompletedEvent(record.RunID, record.Status, record.CompletedAt)); err != nil {
 		return nil, err
 	}
 

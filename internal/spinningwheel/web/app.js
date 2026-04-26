@@ -6,6 +6,7 @@ const playPauseButton = document.getElementById("playPauseButton");
 const stepButton = document.getElementById("stepButton");
 const speedRange = document.getElementById("speedRange");
 const eventCounter = document.getElementById("eventCounter");
+const liveStatus = document.getElementById("liveStatus");
 const agentRoster = document.getElementById("agentRoster");
 const conversationLog = document.getElementById("conversationLog");
 const timeline = document.getElementById("timeline");
@@ -37,6 +38,8 @@ let activeStage = "";
 let activeAgentName = "";
 let decisionLinks = [];
 let conversationItems = [];
+let liveStream = null;
+let liveEventKeys = new Set();
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -271,6 +274,7 @@ async function loadRuns() {
 }
 
 async function loadEvents(runId) {
+  closeLiveStream();
   const response = await fetch(`/api/runs/${runId}/events`);
   const payload = await response.json();
   events = payload.events || [];
@@ -286,6 +290,7 @@ async function loadEvents(runId) {
   renderAgentRoster();
   updatePlaybackControls();
   draw(performance.now());
+  connectLiveStream(runId);
 }
 
 function replay() {
@@ -302,6 +307,50 @@ function replay() {
   renderAgentRoster();
   updatePlaybackControls();
   replayTimer = setInterval(stepForward, playbackDelay());
+}
+
+function connectLiveStream(runId) {
+  closeLiveStream();
+  if (!window.EventSource || !runId) {
+    updateLiveStatus("Live: unsupported", false);
+    return;
+  }
+  liveEventKeys = new Set(events.map(eventKey));
+  updateLiveStatus("Live: connecting", false);
+  liveStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events/stream?follow=1`);
+  liveStream.addEventListener("open", () => updateLiveStatus("Live: connected", true));
+  liveStream.addEventListener("error", () => updateLiveStatus("Live: reconnecting", false));
+  liveStream.addEventListener("visualization-event", (message) => {
+    const event = JSON.parse(message.data);
+    const key = eventKey(event);
+    if (liveEventKeys.has(key)) {
+      return;
+    }
+    liveEventKeys.add(key);
+    events.push(event);
+    if (!isPlaying) {
+      applyEvent(event);
+      replayIndex = events.length;
+      updatePlaybackControls();
+    }
+  });
+}
+
+function closeLiveStream() {
+  if (!liveStream) {
+    return;
+  }
+  liveStream.close();
+  liveStream = null;
+}
+
+function updateLiveStatus(label, online) {
+  liveStatus.textContent = label;
+  liveStatus.classList.toggle("is-offline", !online);
+}
+
+function eventKey(event) {
+  return [event.runId, event.type, event.stage || "", event.timestamp || "", event.agent ? event.agent.name : ""].join("|");
 }
 
 function stepForward() {
