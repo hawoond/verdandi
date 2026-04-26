@@ -97,6 +97,7 @@ func (o Orchestrator) NormalizePlan(request string, proposed []StageDef) (Plan, 
 			Stage:   stage.Stage,
 			Keyword: keyword,
 			Order:   stageOrder[stage.Stage],
+			Agent:   normalizeAgentContract(request, stage.Stage, stage.Agent),
 		})
 		seen[stage.Stage] = true
 	}
@@ -127,6 +128,39 @@ func (o Orchestrator) NormalizePlan(request string, proposed []StageDef) (Plan, 
 func isAllowedStage(stage string) bool {
 	_, ok := stageOrder[stage]
 	return ok
+}
+
+func normalizeAgentContract(request string, stage string, agent *AgentContract) *AgentContract {
+	if agent == nil {
+		return nil
+	}
+	normalized := *agent
+	if normalized.Name == "" {
+		normalized.Name = agentName(stage)
+	}
+	if normalized.Description == "" {
+		normalized.Description = "Dynamic Verdandi agent contract"
+	}
+	if normalized.Command == "" {
+		normalized.Command = "verdandi"
+	}
+	if normalized.Spec.Role == "" {
+		normalized.Spec.Role = stage
+	}
+	if len(normalized.Spec.Capabilities) == 0 {
+		normalized.Spec.Capabilities = capabilitiesFor(stage)
+	}
+	if normalized.Metadata == nil {
+		normalized.Metadata = map[string]any{}
+	}
+	normalized.Metadata["executorStage"] = stage
+	if normalized.Inputs == nil {
+		normalized.Inputs = map[string]string{}
+	}
+	if normalized.Inputs["request"] == "" {
+		normalized.Inputs["request"] = request
+	}
+	return &normalized
 }
 
 func (o Orchestrator) Execute(request string, options map[string]any) (ExecutionResult, error) {

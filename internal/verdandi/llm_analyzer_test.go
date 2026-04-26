@@ -129,6 +129,45 @@ func TestLLMAnalyzerFallsBackWithSpecificReasonWhenStagesMissing(t *testing.T) {
 	}
 }
 
+func TestLLMAnalyzerParsesDynamicAgentContract(t *testing.T) {
+	content := `{
+		"intent":"code-writer",
+		"confidence":0.88,
+		"keywords":["접근성","계산기"],
+		"complexity":{"level":"MEDIUM","score":4},
+		"stages":[{
+			"stage":"code-writer",
+			"keyword":"llm",
+			"agent":{
+				"name":"AccessibilityFocusedFrontendAgent",
+				"description":"Builds UI code with accessibility checks.",
+				"spec":{
+					"role":"frontend accessibility engineer",
+					"capabilities":["ui-implementation","accessibility","validation"]
+				}
+			}
+		}]
+	}`
+	result := analyzeWithLLMContent(t, content, "접근성 좋은 계산기 앱 구현")
+
+	if result.Source != AnalyzerLLM {
+		t.Fatalf("expected llm source, got %s", result.Source)
+	}
+	if result.Plan.Stages[0].Agent == nil {
+		t.Fatalf("expected dynamic agent in stage: %#v", result.Plan.Stages[0])
+	}
+	agent := result.Plan.Stages[0].Agent
+	if agent.Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("unexpected agent contract: %#v", agent)
+	}
+	if agent.Spec.Role != "frontend accessibility engineer" {
+		t.Fatalf("unexpected agent role: %#v", agent.Spec)
+	}
+	if len(agent.Spec.Capabilities) != 3 {
+		t.Fatalf("unexpected capabilities: %#v", agent.Spec.Capabilities)
+	}
+}
+
 func analyzeWithLLMContent(t *testing.T, content string, request string) AnalysisResult {
 	t.Helper()
 

@@ -236,3 +236,55 @@ func TestToolPropagatesFallbackReason(t *testing.T) {
 		t.Fatalf("expected status fallback reason, got %#v", status["fallbackReason"])
 	}
 }
+
+func TestToolAnalyzeAndRunExposeDynamicAgents(t *testing.T) {
+	dataDir := t.TempDir()
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan("접근성 좋은 계산기 앱 구현", []StageDef{
+		{
+			Stage:   "code-writer",
+			Keyword: "llm",
+			Agent: &AgentContract{
+				Name:        "AccessibilityFocusedFrontendAgent",
+				Description: "Builds UI code with accessibility checks.",
+				Spec: AgentSpec{
+					Role:         "frontend accessibility engineer",
+					Capabilities: []string{"ui-implementation", "accessibility", "validation"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentCodeWriter, Confidence: 0.91},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 4},
+			Plan:       plan,
+			Source:     AnalyzerLLM,
+		},
+	})
+
+	analyzed, err := tool.Analyze("접근성 좋은 계산기 앱 구현")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	analyzedPlan := analyzed["plan"].(Plan)
+	if analyzedPlan.Stages[0].Agent == nil || analyzedPlan.Stages[0].Agent.Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("expected dynamic agent in analyze plan, got %#v", analyzedPlan.Stages)
+	}
+
+	run, err := tool.Run("접근성 좋은 계산기 앱 구현")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	status, err := tool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stages := status["stages"].([]StageResult)
+	if stages[0].Stage != "code-writer" || stages[0].Result == nil {
+		t.Fatalf("expected code writer execution, got %#v", stages)
+	}
+}
