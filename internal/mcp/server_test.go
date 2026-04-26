@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/genie-cvc/verdandi/internal/verdandi"
 )
 
 type fakeExecutor struct {
@@ -70,6 +72,34 @@ func TestRunToolForwardsNaturalLanguageRequest(t *testing.T) {
 	}
 	if executor.calls[0].Args["request"] != "계산기 앱을 기획하고 구현하고 테스트해줘" {
 		t.Fatalf("request was not forwarded: %#v", executor.calls[0].Args)
+	}
+}
+
+func TestRunToolReturnsStructuredVerdandiResult(t *testing.T) {
+	dataDir := t.TempDir()
+	input := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run","arguments":{"request":"기획 구현 테스트 문서화"}}}` + "\n"
+	var output bytes.Buffer
+
+	server := NewServer(verdandi.NewExecutor(verdandi.Options{DataDir: dataDir}))
+	if err := server.Serve(strings.NewReader(input), &output); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	responses := decodeResponses(t, output.String())
+	result := responses[0]["result"].(map[string]any)
+	structured := result["structuredContent"].(map[string]any)
+	if structured["ok"] != true {
+		t.Fatalf("expected ok structured content, got %#v", structured)
+	}
+	if structured["action"] != "run" {
+		t.Fatalf("expected run action, got %#v", structured)
+	}
+	if structured["runId"] == "" {
+		t.Fatalf("expected runId, got %#v", structured)
+	}
+	summary := structured["summary"].(map[string]any)
+	if summary["failed"].(float64) != 0 {
+		t.Fatalf("expected no failed stages, got %#v", summary)
 	}
 }
 
