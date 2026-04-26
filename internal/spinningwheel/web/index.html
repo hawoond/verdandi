@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spinning Wheel</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Verdandi visualizer</p>
+          <h1>Spinning Wheel</h1>
+        </div>
+        <select id="runSelect" aria-label="Run"></select>
+        <button id="replayButton" type="button">Replay</button>
+        <section class="inspector" id="inspector">
+          <h2>Agent</h2>
+          <p>Select a run to watch the workspace come alive.</p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <canvas id="map" width="1100" height="720" aria-label="Spinning Wheel workspace"></canvas>
+        <ol id="timeline" class="timeline" aria-label="Event timeline"></ol>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

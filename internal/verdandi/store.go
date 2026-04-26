@@ -19,6 +19,10 @@ func NewStore(path string) Store {
 	return Store{path: path}
 }
 
+func NewStoreForDataDir(dataDir string) Store {
+	return NewStore(filepath.Join(dataDir, "runs.json"))
+}
+
 func (s Store) Save(record RunRecord) error {
 	store, err := s.load()
 	if err != nil {
@@ -29,6 +33,16 @@ func (s Store) Save(record RunRecord) error {
 		store.Runs = store.Runs[len(store.Runs)-100:]
 	}
 	return s.write(store)
+}
+
+func (s Store) List() ([]RunRecord, error) {
+	store, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]RunRecord, len(store.Runs))
+	copy(runs, store.Runs)
+	return runs, nil
 }
 
 func (s Store) Find(runID string) (RunRecord, error) {

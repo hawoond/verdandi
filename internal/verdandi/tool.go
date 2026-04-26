@@ -19,6 +19,7 @@ type Tool struct {
 	orchestrator Orchestrator
 	store        Store
 	agents       AgentRegistry
+	events       EventStore
 }
 
 func NewTool(options Options) Tool {
@@ -39,8 +40,9 @@ func NewTool(options Options) Tool {
 			LLM:          llmConfig,
 		}),
 		orchestrator: orchestrator,
-		store:        NewStore(filepath.Join(dataDir, "runs.json")),
+		store:        NewStoreForDataDir(dataDir),
 		agents:       agents,
+		events:       NewEventStoreForDataDir(dataDir),
 	}
 }
 
@@ -134,6 +136,9 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		CompletedAt:    result.CompletedAt,
 	}
 	if err := t.store.Save(record); err != nil {
+		return nil, err
+	}
+	if err := t.events.SaveRun(record); err != nil {
 		return nil, err
 	}
 

@@ -1,9 +1,11 @@
 package verdandi
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,6 +131,70 @@ func TestToolStoresStatusAndListsOutput(t *testing.T) {
 		if filepath.IsAbs(file.Name) {
 			t.Fatalf("file name should not be absolute: %#v", file)
 		}
+	}
+}
+
+func TestToolRunWritesSpinningWheelEvents(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "시각화 이벤트 테스트", AgentContract{
+		Name: "VisualPlannerCat",
+		Spec: AgentSpec{
+			Role:         "planning cat",
+			Capabilities: []string{"planning"},
+		},
+	}))
+
+	result, err := tool.Run("시각화 이벤트 테스트")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	runID := result["runId"].(string)
+	eventsPath := filepath.Join(dataDir, "events", runID+".jsonl")
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		t.Fatalf("expected spinning wheel events file: %v", err)
+	}
+	defer file.Close()
+
+	types := map[string]bool{}
+	agentNames := map[string]bool{}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event VisualizationEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("event is not JSON: %v", err)
+		}
+		if event.RunID != runID {
+			t.Fatalf("event runId mismatch: %#v", event)
+		}
+		types[event.Type] = true
+		if event.Agent != nil {
+			agentNames[event.Agent.Name] = true
+			if event.Agent.Avatar.Kind == "" {
+				t.Fatalf("expected animal avatar on agent event: %#v", event)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan events: %v", err)
+	}
+
+	for _, eventType := range []string{
+		EventRunStarted,
+		EventAgentSpawned,
+		EventStageStarted,
+		EventAgentDecision,
+		EventStageCompleted,
+		EventMetricsUpdated,
+		EventRunCompleted,
+	} {
+		if !types[eventType] {
+			t.Fatalf("missing event type %q in %#v", eventType, types)
+		}
+	}
+	if !agentNames["VisualPlannerCat"] {
+		t.Fatalf("expected agent event for VisualPlannerCat, got %#v", agentNames)
 	}
 }
 
