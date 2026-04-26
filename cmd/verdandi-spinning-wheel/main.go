@@ -1,0 +1,23 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+
+	"github.com/genie-cvc/verdandi/internal/spinningwheel"
+)
+
+func main() {
+	dataDir := flag.String("data-dir", "", "Verdandi runtime data directory")
+	addr := flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
+	flag.Parse()
+
+	server := spinningwheel.NewServer(*dataDir)
+	fmt.Fprintf(os.Stderr, "Spinning Wheel listening on http://%s\n", *addr)
+	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
+		fmt.Fprintf(os.Stderr, "spinning wheel server error: %v\n", err)
+		os.Exit(1)
+	}
+}
