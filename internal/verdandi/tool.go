@@ -9,11 +9,13 @@ import (
 )
 
 type Options struct {
-	DataDir string
+	DataDir  string
+	Analyzer string
+	LLM      LLMAnalyzerConfig
 }
 
 type Tool struct {
-	classifier   Classifier
+	analyzer     Analyzer
 	orchestrator Orchestrator
 	store        Store
 }
@@ -23,9 +25,14 @@ func NewTool(options Options) Tool {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
 	}
+	orchestrator := NewOrchestrator(dataDir)
 	return Tool{
-		classifier:   NewClassifier(),
-		orchestrator: NewOrchestrator(dataDir),
+		analyzer: NewAnalyzer(AnalyzerConfig{
+			Mode:         options.Analyzer,
+			Orchestrator: orchestrator,
+			LLM:          options.LLM,
+		}),
+		orchestrator: orchestrator,
 		store:        NewStore(filepath.Join(dataDir, "runs.json")),
 	}
 }
@@ -35,7 +42,10 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		return nil, fmt.Errorf("request 문자열이 필요합니다")
 	}
 
-	analysis := t.classifier.Analyze(request)
+	analysis, err := t.analyzer.Analyze(request)
+	if err != nil {
+		return nil, err
+	}
 	contract := AgentContract{
 		Name:        agentName(analysis.Intent.Category),
 		Description: "Natural-language Verdandi agent contract",
@@ -47,6 +57,7 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		Metadata: map[string]any{
 			"intent_analysis": analysis.Intent,
 			"complexity":      analysis.Complexity,
+			"analyzer":        analysis.Source,
 		},
 		Inputs: map[string]string{
 			"request": request,
@@ -59,6 +70,8 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		"intent":     analysis.Intent.Category,
 		"confidence": analysis.Intent.Confidence,
 		"agent":      contract,
+		"plan":       analysis.Plan,
+		"analyzer":   analysis.Source,
 	}, nil
 }
 

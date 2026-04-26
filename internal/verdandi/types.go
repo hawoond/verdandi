@@ -73,12 +73,27 @@ type Plan struct {
 }
 
 type StageResult struct {
-	Stage   string         `json:"stage"`
-	Status  string         `json:"status"`
-	Result  map[string]any `json:"result,omitempty"`
-	Error   string         `json:"error,omitempty"`
-	Started time.Time      `json:"started_at"`
-	Ended   time.Time      `json:"ended_at"`
+	Stage   string       `json:"stage"`
+	Status  string       `json:"status"`
+	Result  *StageOutput `json:"result,omitempty"`
+	Error   string       `json:"error,omitempty"`
+	Started time.Time    `json:"started_at"`
+	Ended   time.Time    `json:"ended_at"`
+}
+
+type StageOutput struct {
+	Type      string       `json:"type"`
+	Status    string       `json:"status,omitempty"`
+	Message   string       `json:"message,omitempty"`
+	OutputDir string       `json:"outputDir,omitempty"`
+	Files     []FileEntry  `json:"files,omitempty"`
+	Tests     []TestResult `json:"tests,omitempty"`
+}
+
+type TestResult struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Output string `json:"output,omitempty"`
 }
 
 type Summary struct {

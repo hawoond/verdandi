@@ -1,39 +1,46 @@
 # Verdandi
 
-Verdandi is a pure Go local multi-agent orchestration runtime with a real MCP stdio server.
+Verdandi is a pure Go local orchestration runtime that turns natural-language
+requests into small, inspectable workflows. It ships with both a CLI and a real
+MCP stdio server, so the same runtime can be used from a terminal or an
+MCP-capable LLM client.
+
+## What It Does
+
+- Analyzes natural-language requests and builds an execution plan.
+- Splits work into `planner`, `code-writer`, `tester`, `documenter`, and `deployer` stages.
+- Stores generated outputs and run history under `.verdandi/`.
+- Exposes MCP tools: `run`, `analyze`, `orchestrate`, `get_status`, and `open_output`.
+- Validates generated Go projects with `go test ./...`.
+- Selects the request analyzer backend from `keyword`, `llm`, or `auto`.
 
 ## Quick Start
 
 ```bash
 go install ./cmd/verdandi
 go install ./cmd/verdandi-mcp
-verdandi "plan, implement, test, and document a calculator app"
+verdandi "계산기 앱을 기획하고 구현하고 테스트하고 문서화해줘"
 ```
 
-Verdandi treats a plain sentence as the default command. The request is analyzed,
-the required agents are selected, and the workflow runs automatically.
-
-Analyze without running the workflow:
+Run without installing:
 
 ```bash
-verdandi --analyze "analyze this task and dynamically coordinate the required agents"
+go run ./cmd/verdandi --json "기획 구현 테스트 문서화"
 ```
 
-Return machine-readable JSON:
+Preview the plan without executing:
 
 ```bash
-verdandi --json "plan, implement, test, and document a calculator app"
+go run ./cmd/verdandi --analyze "기획 구현 테스트 문서화"
 ```
 
 ## MCP Server
-
-Build the MCP server:
 
 ```bash
 go build -o bin/verdandi-mcp ./cmd/verdandi-mcp
 ```
 
-MCP client config:
+Example MCP client config:
 
 ```json
 {
@@ -45,31 +52,37 @@ MCP client config:
 }
 ```
 
-## MCP Tools
-
-- `run` - default natural-language execution tool for LLMs
-- `analyze`
-- `orchestrate`
-- `get_status`
-- `open_output`
-
-For normal use, an LLM only needs to call `run` with:
+For normal LLM use, call the `run` tool with a request:
 
 ```json
 {
-  "request": "plan, implement, test, and document a calculator app"
+  "request": "계산기 앱을 기획하고 구현하고 테스트해줘"
 }
 ```
 
-## Data
+## LLM Analyzer
 
-Runtime data is stored under:
+The default backend is the local `keyword` analyzer. To delegate natural-language
+interpretation to an LLM, configure an OpenAI-compatible chat-completions
+endpoint and API key, then select `llm` or `auto`.
 
-```text
-.verdandi/
+```bash
+export VERDANDI_ANALYZER=llm
+export VERDANDI_LLM_ENDPOINT=https://example.com/v1/chat/completions
+export VERDANDI_LLM_API_KEY=...
+verdandi --analyze "build a calculator app and validate quality"
 ```
 
-## Verification
+Verdandi validates LLM-proposed stages against its allowlist and falls back to
+the keyword analyzer if the LLM response is unavailable or invalid.
+
+## Current Scope
+
+Verdandi is currently a local MVP runtime. It does not spawn external agent
+processes yet. Its focus is request analysis, execution plan previews, local
+file generation, `go test ./...` validation, and run history lookup.
+
+## Development Checks
 
 ```bash
 go test ./...

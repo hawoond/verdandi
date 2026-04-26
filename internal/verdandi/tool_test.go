@@ -30,6 +30,58 @@ func TestToolRunAcceptsNaturalLanguageRequest(t *testing.T) {
 	}
 }
 
+func TestToolAnalyzeReturnsExecutionPlan(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Analyze("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+
+	if result["action"] != "analyze" {
+		t.Fatalf("expected analyze action, got %#v", result["action"])
+	}
+
+	plan, ok := result["plan"].(Plan)
+	if !ok {
+		t.Fatalf("expected typed Plan in analyze result, got %#v", result["plan"])
+	}
+	if plan.StageCount != 4 {
+		t.Fatalf("expected 4 stages, got %#v", plan)
+	}
+
+	got := []string{}
+	for _, stage := range plan.Stages {
+		got = append(got, stage.Stage)
+	}
+	want := []string{"planner", "code-writer", "tester", "documenter"}
+	if !equalStrings(got, want) {
+		t.Fatalf("stages mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestToolUsesConfiguredAnalyzer(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{
+		DataDir:  dataDir,
+		Analyzer: AnalyzerKeyword,
+	})
+
+	result, err := tool.Analyze("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+
+	if result["intent"] != IntentPlanner {
+		t.Fatalf("expected planner intent, got %#v", result["intent"])
+	}
+	plan := result["plan"].(Plan)
+	if plan.StageCount != 4 {
+		t.Fatalf("expected 4 stages, got %#v", plan)
+	}
+}
+
 func TestToolStoresStatusAndListsOutput(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewTool(Options{DataDir: dataDir})
@@ -59,6 +111,31 @@ func TestToolStoresStatusAndListsOutput(t *testing.T) {
 	for _, file := range files {
 		if filepath.IsAbs(file.Name) {
 			t.Fatalf("file name should not be absolute: %#v", file)
+		}
+	}
+}
+
+func TestToolStatusIncludesTypedStageResults(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Run("기획 구현 테스트 문서화")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	status, err := tool.GetStatus(result["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+
+	stages := status["stages"].([]StageResult)
+	if len(stages) != 4 {
+		t.Fatalf("expected 4 stages, got %#v", stages)
+	}
+	for _, stage := range stages {
+		if stage.Result == nil {
+			t.Fatalf("expected result for stage %s", stage.Stage)
 		}
 	}
 }

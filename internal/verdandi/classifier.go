@@ -58,7 +58,8 @@ func (c Classifier) ClassifyIntent(text string, keywords []KeywordFrequency) Int
 
 	bestIntent := IntentGeneral
 	bestScore := 0
-	for intent, intentKeywords := range c.keywords {
+	for _, intent := range intentPriority {
+		intentKeywords := c.keywords[intent]
 		score := 0
 		for _, keyword := range intentKeywords {
 			normalized := strings.ToLower(keyword)
@@ -156,6 +157,15 @@ func (c Classifier) EvaluateComplexity(text string) ComplexityResult {
 
 var tokenRegexp = regexp.MustCompile(`[a-z0-9]+|[가-힣]+`)
 var stripRegexp = regexp.MustCompile(`[^\w\s가-힣]`)
+
+var intentPriority = []string{
+	IntentPlanner,
+	IntentOrchestrator,
+	IntentCodeWriter,
+	IntentDocumenter,
+	IntentResearcher,
+	IntentDataAnalyst,
+}
 
 func preprocess(text string) string {
 	return strings.TrimSpace(stripRegexp.ReplaceAllString(strings.ToLower(text), ""))
