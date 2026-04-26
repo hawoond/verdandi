@@ -70,7 +70,7 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		},
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"ok":         true,
 		"action":     "analyze",
 		"intent":     analysis.Intent.Category,
@@ -78,7 +78,12 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		"agent":      contract,
 		"plan":       analysis.Plan,
 		"analyzer":   analysis.Source,
-	}, nil
+	}
+	if analysis.FallbackReason != "" {
+		contract.Metadata["fallbackReason"] = analysis.FallbackReason
+		result["fallbackReason"] = analysis.FallbackReason
+	}
+	return result, nil
 }
 
 func (t Tool) Run(request string, options ...map[string]any) (map[string]any, error) {
@@ -95,6 +100,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		return nil, err
 	}
 	result.Analyzer = analysis.Source
+	result.FallbackReason = analysis.FallbackReason
 
 	status := "success"
 	if result.Summary.Failed > 0 {
@@ -102,21 +108,22 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	}
 
 	record := RunRecord{
-		RunID:       createRunID(),
-		Status:      status,
-		Request:     request,
-		Analyzer:    result.Analyzer,
-		OutputDir:   result.OutputDir,
-		Summary:     result.Summary,
-		Stages:      result.Stages,
-		CreatedAt:   time.Now().UTC(),
-		CompletedAt: result.CompletedAt,
+		RunID:          createRunID(),
+		Status:         status,
+		Request:        request,
+		Analyzer:       result.Analyzer,
+		FallbackReason: result.FallbackReason,
+		OutputDir:      result.OutputDir,
+		Summary:        result.Summary,
+		Stages:         result.Stages,
+		CreatedAt:      time.Now().UTC(),
+		CompletedAt:    result.CompletedAt,
 	}
 	if err := t.store.Save(record); err != nil {
 		return nil, err
 	}
 
-	return map[string]any{
+	response := map[string]any{
 		"ok":        status == "success",
 		"action":    "run",
 		"runId":     record.RunID,
@@ -125,7 +132,11 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		"analyzer":  record.Analyzer,
 		"summary":   record.Summary,
 		"outputDir": record.OutputDir,
-	}, nil
+	}
+	if record.FallbackReason != "" {
+		response["fallbackReason"] = record.FallbackReason
+	}
+	return response, nil
 }
 
 func (t Tool) Orchestrate(request string, options map[string]any) (map[string]any, error) {
@@ -142,7 +153,7 @@ func (t Tool) GetStatus(runID string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	response := map[string]any{
 		"ok":           true,
 		"action":       "status",
 		"runId":        record.RunID,
@@ -154,7 +165,11 @@ func (t Tool) GetStatus(runID string) (map[string]any, error) {
 		"stages":       record.Stages,
 		"created_at":   record.CreatedAt,
 		"completed_at": record.CompletedAt,
-	}, nil
+	}
+	if record.FallbackReason != "" {
+		response["fallbackReason"] = record.FallbackReason
+	}
+	return response, nil
 }
 
 func (t Tool) OpenOutput(runID string) (map[string]any, error) {

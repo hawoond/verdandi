@@ -13,12 +13,13 @@ type Analyzer interface {
 }
 
 type AnalysisResult struct {
-	Text       string             `json:"text"`
-	Intent     IntentResult       `json:"intent"`
-	Complexity ComplexityResult   `json:"complexity"`
-	Keywords   []KeywordFrequency `json:"keywords"`
-	Plan       Plan               `json:"plan"`
-	Source     string             `json:"source"`
+	Text           string             `json:"text"`
+	Intent         IntentResult       `json:"intent"`
+	Complexity     ComplexityResult   `json:"complexity"`
+	Keywords       []KeywordFrequency `json:"keywords"`
+	Plan           Plan               `json:"plan"`
+	Source         string             `json:"source"`
+	FallbackReason string             `json:"fallbackReason,omitempty"`
 }
 
 type AnalyzerConfig struct {
