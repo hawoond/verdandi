@@ -12,11 +12,12 @@ import (
 )
 
 type LLMAnalyzerConfig struct {
-	Endpoint string
-	Model    string
-	APIKey   string
-	Timeout  time.Duration
-	Client   *http.Client
+	Endpoint       string
+	Model          string
+	APIKey         string
+	Timeout        time.Duration
+	Client         *http.Client
+	ExistingAgents []AgentContract
 }
 
 type LLMAnalyzer struct {
@@ -73,7 +74,7 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 		"model": model,
 		"messages": []map[string]string{
 			{"role": "system", "content": llmAnalyzerSystemPrompt()},
-			{"role": "user", "content": request},
+			{"role": "user", "content": a.llmUserContent(request)},
 		},
 		"temperature": 0,
 	}
@@ -147,7 +148,24 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 }
 
 func llmAnalyzerSystemPrompt() string {
-	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages.`
+	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages. Each stage may include an agent contract optimized for the request. If existingAgents contains a similar agent, include agentDecision.action as reuse-enhance, rewrite, or separate and explain the reason.`
+}
+
+func (a LLMAnalyzer) llmUserContent(request string) string {
+	payload := map[string]any{
+		"request": request,
+		"agentLifecycleOptions": []string{
+			AgentPolicyReuseEnhance,
+			AgentPolicyRewrite,
+			AgentPolicySeparate,
+		},
+		"existingAgents": a.config.ExistingAgents,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return request
+	}
+	return string(encoded)
 }
 
 func extractJSONObject(content string) (string, error) {

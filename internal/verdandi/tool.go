@@ -27,15 +27,20 @@ func NewTool(options Options) Tool {
 		dataDir = DefaultDataDir()
 	}
 	orchestrator := NewOrchestrator(dataDir)
+	agents := NewAgentRegistry(filepath.Join(dataDir, "agents.json"))
+	llmConfig := options.LLM
+	if existingAgents, err := agents.List(); err == nil {
+		llmConfig.ExistingAgents = existingAgents
+	}
 	return Tool{
 		analyzer: NewAnalyzer(AnalyzerConfig{
 			Mode:         options.Analyzer,
 			Orchestrator: orchestrator,
-			LLM:          options.LLM,
+			LLM:          llmConfig,
 		}),
 		orchestrator: orchestrator,
 		store:        NewStore(filepath.Join(dataDir, "runs.json")),
-		agents:       NewAgentRegistry(filepath.Join(dataDir, "agents.json")),
+		agents:       agents,
 	}
 }
 
@@ -50,7 +55,7 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 		return nil, fmt.Errorf("request 문자열이 필요합니다")
 	}
 
-	analysis, err := t.analyzer.Analyze(request)
+	analysis, err := t.analyzeRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +98,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if len(options) > 0 && options[0] != nil {
 		runOptions = options[0]
 	}
-	analysis, err := t.analyzer.Analyze(request)
+	analysis, err := t.analyzeRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +150,17 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	return response, nil
 }
 
+func (t Tool) analyzeRequest(request string) (AnalysisResult, error) {
+	analyzer := t.analyzer
+	if llm, ok := analyzer.(LLMAnalyzer); ok {
+		if agents, err := t.agents.List(); err == nil {
+			llm.config.ExistingAgents = agents
+		}
+		analyzer = llm
+	}
+	return analyzer.Analyze(request)
+}
+
 func (t Tool) Orchestrate(request string, options map[string]any) (map[string]any, error) {
 	result, err := t.Run(request, options)
 	if err != nil {
@@ -176,6 +192,20 @@ func (t Tool) GetStatus(runID string) (map[string]any, error) {
 		response["fallbackReason"] = record.FallbackReason
 	}
 	return response, nil
+}
+
+func (t Tool) ListAgents() (map[string]any, error) {
+	agents, err := t.agents.List()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "list_agents",
+		"count":   len(agents),
+		"agents":  agents,
+		"options": agentPolicyOptions(),
+	}, nil
 }
 
 func (t Tool) OpenOutput(runID string) (map[string]any, error) {
@@ -225,6 +255,8 @@ func (t Tool) Handle(action string, params map[string]any) (map[string]any, erro
 		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
 	case "status", "get_status":
 		return t.GetStatus(requiredString(params, "runId"))
+	case "list_agents":
+		return t.ListAgents()
 	case "open_output":
 		return t.OpenOutput(requiredString(params, "runId"))
 	default:

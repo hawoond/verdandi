@@ -1,7 +1,11 @@
 package verdandi
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -418,6 +422,142 @@ func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
 	}
 	if stage.AgentDecision.ExistingAgentName != "GeneralAnalysisAgent" {
 		t.Fatalf("expected decision to identify similar existing agent, got %#v", stage.AgentDecision)
+	}
+}
+
+func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
+	dataDir := t.TempDir()
+	firstTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "기존 접근성 에이전트 생성", AgentContract{
+		Name:        "LegacyAccessibilityAgent",
+		Description: "Builds basic accessible interfaces.",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility", "semantic-html"},
+		},
+	}))
+	if _, err := firstTool.Run("기존 접근성 에이전트 생성"); err != nil {
+		t.Fatalf("initial run failed: %v", err)
+	}
+
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan("접근성 에이전트 재작성", []StageDef{{
+		Stage:   "code-writer",
+		Keyword: "llm",
+		Agent: &AgentContract{
+			Name:        "ModernAccessibilityAgent",
+			Description: "Builds modern accessible interfaces.",
+			Spec: AgentSpec{
+				Role:         "frontend accessibility engineer",
+				Capabilities: []string{"accessibility", "design-system"},
+			},
+		},
+		AgentDecision: &AgentLifecycleDecision{
+			Action:            AgentPolicyRewrite,
+			ExistingAgentName: "LegacyAccessibilityAgent",
+			Reason:            "LLM selected rewrite",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Intent:     IntentResult{Category: IntentCodeWriter, Confidence: 0.91},
+		Complexity: ComplexityResult{Level: "MEDIUM", Score: 4},
+		Plan:       plan,
+		Source:     AnalyzerLLM,
+	}})
+
+	run, err := tool.Run("접근성 에이전트 재작성")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	status, err := tool.GetStatus(run["runId"].(string))
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stage := status["stages"].([]StageResult)[0]
+	if stage.Agent == nil || stage.Agent.Name != "ModernAccessibilityAgent" {
+		t.Fatalf("expected analyzer rewrite candidate to be selected, got %#v", stage.Agent)
+	}
+	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyRewrite {
+		t.Fatalf("expected analyzer rewrite decision, got %#v", stage.AgentDecision)
+	}
+	if stage.AgentDecision.Reason != "LLM selected rewrite" {
+		t.Fatalf("expected analyzer decision reason to be preserved, got %#v", stage.AgentDecision)
+	}
+}
+
+func TestToolListAgentsReturnsPersistedContracts(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "접근성 UI 에이전트 생성", AgentContract{
+		Name: "InspectableAccessibilityAgent",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility"},
+		},
+	}))
+	if _, err := tool.Run("접근성 UI 에이전트 생성"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	listed, err := tool.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents failed: %v", err)
+	}
+	if listed["action"] != "list_agents" {
+		t.Fatalf("expected list_agents action, got %#v", listed)
+	}
+	agents := listed["agents"].([]AgentContract)
+	if len(agents) != 1 || agents[0].Name != "InspectableAccessibilityAgent" {
+		t.Fatalf("expected persisted agent contract, got %#v", agents)
+	}
+}
+
+func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
+	dataDir := t.TempDir()
+	userMessages := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		userMessages = append(userMessages, payload.Messages[len(payload.Messages)-1].Content)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": `{"intent":"code-writer","confidence":0.8,"keywords":["접근성"],"complexity":{"level":"LOW","score":2},"stages":[{"stage":"code-writer","keyword":"llm","agent":{"name":"SavedAccessibilityAgent","spec":{"role":"frontend accessibility engineer","capabilities":["accessibility"]}}}]}`,
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewTool(Options{
+		DataDir:  dataDir,
+		Analyzer: AnalyzerLLM,
+		LLM: LLMAnalyzerConfig{
+			Endpoint: server.URL,
+			APIKey:   "test-key",
+			Model:    "test-model",
+		},
+	})
+	if _, err := tool.Run("접근성 에이전트 생성"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if _, err := tool.Analyze("저장된 에이전트 참고해서 분석"); err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+
+	if len(userMessages) != 2 {
+		t.Fatalf("expected two LLM calls, got %#v", userMessages)
+	}
+	if !strings.Contains(userMessages[1], "SavedAccessibilityAgent") {
+		t.Fatalf("expected second LLM request to include refreshed agent context, got %s", userMessages[1])
 	}
 }
 
