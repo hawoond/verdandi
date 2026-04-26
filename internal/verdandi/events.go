@@ -52,10 +52,14 @@ func NewEventStoreForDataDir(dataDir string) EventStore {
 
 func (s EventStore) SaveRun(record RunRecord) error {
 	events := eventsForRun(record)
+	return s.Save(record.RunID, events)
+}
+
+func (s EventStore) Save(runID string, events []VisualizationEvent) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
-	file, err := os.Create(s.path(record.RunID))
+	file, err := os.Create(s.path(runID))
 	if err != nil {
 		return err
 	}
@@ -64,6 +68,31 @@ func (s EventStore) SaveRun(record RunRecord) error {
 	encoder := json.NewEncoder(file)
 	for _, event := range events {
 		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s EventStore) Reset(runID string) error {
+	return s.Save(runID, []VisualizationEvent{})
+}
+
+func (s EventStore) Append(event VisualizationEvent) error {
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(s.path(event.RunID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return json.NewEncoder(file).Encode(event)
+}
+
+func (s EventStore) AppendMany(events []VisualizationEvent) error {
+	for _, event := range events {
+		if err := s.Append(event); err != nil {
 			return err
 		}
 	}
@@ -97,75 +126,93 @@ func (s EventStore) path(runID string) string {
 }
 
 func eventsForRun(record RunRecord) []VisualizationEvent {
-	events := []VisualizationEvent{{
-		RunID:     record.RunID,
-		Type:      EventRunStarted,
-		Timestamp: record.CreatedAt,
-		Status:    record.Status,
-		Message:   record.Request,
-	}}
+	events := []VisualizationEvent{runStartedEvent(record.RunID, record.Status, record.Request, record.CreatedAt)}
 
 	for _, stage := range record.Stages {
-		agent := visualizationAgentForStage(stage)
+		events = append(events, stageStartedEvents(record.RunID, stage)...)
+		events = append(events, stageCompletedEvents(record.RunID, stage)...)
+	}
+
+	events = append(events, runCompletedEvent(record.RunID, record.Status, record.CompletedAt))
+	return events
+}
+
+func runStartedEvent(runID string, status string, request string, timestamp time.Time) VisualizationEvent {
+	return VisualizationEvent{
+		RunID:     runID,
+		Type:      EventRunStarted,
+		Timestamp: timestamp,
+		Status:    status,
+		Message:   request,
+	}
+}
+
+func stageStartedEvents(runID string, stage StageResult) []VisualizationEvent {
+	agent := visualizationAgentForStage(stage)
+	events := []VisualizationEvent{{
+		RunID:     runID,
+		Type:      EventAgentSpawned,
+		Timestamp: stage.Started,
+		Stage:     stage.Stage,
+		Agent:     agent,
+		Message:   "Hello, I'm ready.",
+	}, {
+		RunID:     runID,
+		Type:      EventStageStarted,
+		Timestamp: stage.Started,
+		Stage:     stage.Stage,
+		Agent:     agent,
+		Message:   stageMovementMessage(stage.Stage),
+	}}
+	if stage.AgentDecision != nil {
 		events = append(events, VisualizationEvent{
-			RunID:     record.RunID,
-			Type:      EventAgentSpawned,
+			RunID:     runID,
+			Type:      EventAgentDecision,
 			Timestamp: stage.Started,
 			Stage:     stage.Stage,
 			Agent:     agent,
-			Message:   "Hello, I'm ready.",
+			Decision:  stage.AgentDecision,
+			Message:   stage.AgentDecision.Reason,
 		})
+	}
+	return events
+}
+
+func stageCompletedEvents(runID string, stage StageResult) []VisualizationEvent {
+	agent := visualizationAgentForStage(stage)
+	events := []VisualizationEvent{{
+		RunID:     runID,
+		Type:      EventStageCompleted,
+		Timestamp: stage.Ended,
+		Stage:     stage.Stage,
+		Status:    stage.Status,
+		Agent:     agent,
+		Message:   stage.Error,
+	}}
+	if stage.Agent != nil {
+		metrics := stage.Agent.Metrics
 		events = append(events, VisualizationEvent{
-			RunID:     record.RunID,
-			Type:      EventStageStarted,
-			Timestamp: stage.Started,
-			Stage:     stage.Stage,
-			Agent:     agent,
-			Message:   stageMovementMessage(stage.Stage),
-		})
-		if stage.AgentDecision != nil {
-			events = append(events, VisualizationEvent{
-				RunID:     record.RunID,
-				Type:      EventAgentDecision,
-				Timestamp: stage.Started,
-				Stage:     stage.Stage,
-				Agent:     agent,
-				Decision:  stage.AgentDecision,
-				Message:   stage.AgentDecision.Reason,
-			})
-		}
-		events = append(events, VisualizationEvent{
-			RunID:     record.RunID,
-			Type:      EventStageCompleted,
+			RunID:     runID,
+			Type:      EventMetricsUpdated,
 			Timestamp: stage.Ended,
 			Stage:     stage.Stage,
 			Status:    stage.Status,
 			Agent:     agent,
-			Message:   stage.Error,
+			Metrics:   &metrics,
+			Message:   "agent metrics updated",
 		})
-		if stage.Agent != nil {
-			metrics := stage.Agent.Metrics
-			events = append(events, VisualizationEvent{
-				RunID:     record.RunID,
-				Type:      EventMetricsUpdated,
-				Timestamp: stage.Ended,
-				Stage:     stage.Stage,
-				Status:    stage.Status,
-				Agent:     agent,
-				Metrics:   &metrics,
-				Message:   "agent metrics updated",
-			})
-		}
 	}
-
-	events = append(events, VisualizationEvent{
-		RunID:     record.RunID,
-		Type:      EventRunCompleted,
-		Timestamp: record.CompletedAt,
-		Status:    record.Status,
-		Message:   "run completed",
-	})
 	return events
+}
+
+func runCompletedEvent(runID string, status string, timestamp time.Time) VisualizationEvent {
+	return VisualizationEvent{
+		RunID:     runID,
+		Type:      EventRunCompleted,
+		Timestamp: timestamp,
+		Status:    status,
+		Message:   "run completed",
+	}
 }
 
 func visualizationAgentForStage(stage StageResult) *VisualizationAgent {

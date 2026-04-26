@@ -14,6 +14,15 @@ type Orchestrator struct {
 	dataDir string
 }
 
+type StageLifecyclePhase string
+
+const (
+	StageLifecycleStarted   StageLifecyclePhase = "started"
+	StageLifecycleCompleted StageLifecyclePhase = "completed"
+)
+
+type StageObserver func(StageLifecyclePhase, StageResult)
+
 func NewOrchestrator(dataDir string) Orchestrator {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
@@ -182,6 +191,10 @@ func (o Orchestrator) Execute(request string, options map[string]any) (Execution
 }
 
 func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionResult, error) {
+	return o.ExecutePlanWithObserver(plan, options, nil)
+}
+
+func (o Orchestrator) ExecutePlanWithObserver(plan Plan, options map[string]any, observer StageObserver) (ExecutionResult, error) {
 	result := ExecutionResult{
 		Request: plan.OriginalRequest,
 		Plan:    plan,
@@ -191,18 +204,24 @@ func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionR
 	var previous *StageOutput
 	for _, stage := range plan.Stages {
 		started := time.Now().UTC()
-		stageOutput, err := o.executeStage(stage.Stage, plan.OriginalRequest, previous)
 		record := StageResult{
 			Stage:         stage.Stage,
 			Agent:         stage.Agent,
 			AgentDecision: stage.AgentDecision,
 			Started:       started,
-			Ended:         time.Now().UTC(),
 		}
+		if observer != nil {
+			observer(StageLifecycleStarted, record)
+		}
+		stageOutput, err := o.executeStage(stage.Stage, plan.OriginalRequest, previous)
+		record.Ended = time.Now().UTC()
 		if err != nil {
 			record.Status = "error"
 			record.Error = err.Error()
 			result.Stages = append(result.Stages, record)
+			if observer != nil {
+				observer(StageLifecycleCompleted, record)
+			}
 			if stopOnError(options) {
 				break
 			}
@@ -212,6 +231,9 @@ func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionR
 		record.Status = "success"
 		record.Result = &stageOutput
 		result.Stages = append(result.Stages, record)
+		if observer != nil {
+			observer(StageLifecycleCompleted, record)
+		}
 		previous = &stageOutput
 		if stageOutput.OutputDir != "" {
 			result.OutputDir = stageOutput.OutputDir

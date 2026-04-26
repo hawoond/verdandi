@@ -96,10 +96,31 @@ button {
   accent-color: #2e6f50;
 }
 
-.event-counter {
+.event-counter,
+.live-status {
   margin: 0;
   color: #5d695f;
   font-size: 13px;
+}
+
+.live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #2e6f50;
+  font-weight: 700;
+}
+
+.live-status::before {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+.live-status.is-offline {
+  color: #8d5347;
 }
 
 .agent-roster,
