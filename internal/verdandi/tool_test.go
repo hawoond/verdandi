@@ -334,6 +334,9 @@ func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
 	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyReuseEnhance {
 		t.Fatalf("expected reuse-enhance decision, got %#v", stage.AgentDecision)
 	}
+	if stage.AgentDecision.Source != AgentDecisionSourceDefault {
+		t.Fatalf("expected default decision source, got %#v", stage.AgentDecision)
+	}
 	if !containsString(stage.Agent.Spec.Capabilities, "dashboard-ui") {
 		t.Fatalf("expected reused agent to gain new capability, got %#v", stage.Agent.Spec.Capabilities)
 	}
@@ -481,6 +484,9 @@ func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
 	}
 	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyRewrite {
 		t.Fatalf("expected analyzer rewrite decision, got %#v", stage.AgentDecision)
+	}
+	if stage.AgentDecision.Source != AgentDecisionSourceStageDecision {
+		t.Fatalf("expected analyzer decision source, got %#v", stage.AgentDecision)
 	}
 	if stage.AgentDecision.Reason != "LLM selected rewrite" {
 		t.Fatalf("expected analyzer decision reason to be preserved, got %#v", stage.AgentDecision)
@@ -682,6 +688,12 @@ func TestToolRunAppliesLifecycleRecommendationWhenPolicyIsImplicit(t *testing.T)
 	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicyRewrite {
 		t.Fatalf("expected rewrite recommendation to be applied, got %#v", stage.AgentDecision)
 	}
+	if stage.AgentDecision.Source != AgentDecisionSourceRegistryRecommendation {
+		t.Fatalf("expected registry recommendation source, got %#v", stage.AgentDecision)
+	}
+	if !strings.Contains(stage.AgentDecision.Reason, "repeated failures") {
+		t.Fatalf("expected recommendation reason to be preserved, got %#v", stage.AgentDecision)
+	}
 	if stage.Agent == nil || stage.Agent.Name != "ModernAccessibilityAgent" {
 		t.Fatalf("expected rewritten candidate to be selected, got %#v", stage.Agent)
 	}
@@ -724,6 +736,9 @@ func TestToolRunOptionsOverrideLifecycleRecommendation(t *testing.T) {
 	stage := status["stages"].([]StageResult)[0]
 	if stage.AgentDecision == nil || stage.AgentDecision.Action != AgentPolicySeparate {
 		t.Fatalf("expected explicit separate policy to override recommendation, got %#v", stage.AgentDecision)
+	}
+	if stage.AgentDecision.Source != AgentDecisionSourceRunOption {
+		t.Fatalf("expected run option decision source, got %#v", stage.AgentDecision)
 	}
 	if stage.Agent == nil || stage.Agent.Name != "ExperimentAnalysisAgent" {
 		t.Fatalf("expected separate candidate to be selected, got %#v", stage.Agent)
