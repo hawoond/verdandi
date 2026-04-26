@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+type staticAnalyzer struct {
+	result AnalysisResult
+	err    error
+}
+
+func (a staticAnalyzer) Analyze(request string) (AnalysisResult, error) {
+	if a.err != nil {
+		return AnalysisResult{}, a.err
+	}
+	a.result.Text = request
+	return a.result, nil
+}
+
 func TestToolRunAcceptsNaturalLanguageRequest(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewTool(Options{DataDir: dataDir})
@@ -137,5 +150,50 @@ func TestToolStatusIncludesTypedStageResults(t *testing.T) {
 		if stage.Result == nil {
 			t.Fatalf("expected result for stage %s", stage.Stage)
 		}
+	}
+}
+
+func TestToolRunUsesAnalyzerPlan(t *testing.T) {
+	dataDir := t.TempDir()
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan("문서만 작성", []StageDef{
+		{Stage: "documenter", Keyword: "llm"},
+	})
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentDocumenter, Confidence: 0.9},
+			Complexity: ComplexityResult{Level: "LOW", Score: 1},
+			Plan:       plan,
+			Source:     AnalyzerLLM,
+		},
+	})
+
+	result, err := tool.Run("문서만 작성")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	if result["analyzer"] != AnalyzerLLM {
+		t.Fatalf("expected llm analyzer, got %#v", result["analyzer"])
+	}
+	summary := result["summary"].(Summary)
+	if summary.TotalStages != 1 {
+		t.Fatalf("expected analyzer plan to drive one stage, got %#v", summary)
+	}
+
+	runID := result["runId"].(string)
+	status, err := tool.GetStatus(runID)
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	stages := status["stages"].([]StageResult)
+	if len(stages) != 1 || stages[0].Stage != "documenter" {
+		t.Fatalf("expected documenter-only run, got %#v", stages)
+	}
+	if status["analyzer"] != AnalyzerLLM {
+		t.Fatalf("expected analyzer in status, got %#v", status["analyzer"])
 	}
 }

@@ -107,6 +107,7 @@ type Summary struct {
 type ExecutionResult struct {
 	Request     string        `json:"request"`
 	Plan        Plan          `json:"plan"`
+	Analyzer    string        `json:"analyzer,omitempty"`
 	Stages      []StageResult `json:"stages"`
 	OutputDir   string        `json:"outputDir,omitempty"`
 	Summary     Summary       `json:"summary"`
@@ -131,6 +132,7 @@ type RunRecord struct {
 	RunID       string        `json:"runId"`
 	Status      string        `json:"status"`
 	Request     string        `json:"request"`
+	Analyzer    string        `json:"analyzer,omitempty"`
 	OutputDir   string        `json:"outputDir,omitempty"`
 	Summary     Summary       `json:"summary"`
 	Stages      []StageResult `json:"stages"`

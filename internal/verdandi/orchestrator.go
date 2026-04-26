@@ -131,8 +131,12 @@ func isAllowedStage(stage string) bool {
 
 func (o Orchestrator) Execute(request string, options map[string]any) (ExecutionResult, error) {
 	plan := o.ParseRequest(request)
+	return o.ExecutePlan(plan, options)
+}
+
+func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionResult, error) {
 	result := ExecutionResult{
-		Request: request,
+		Request: plan.OriginalRequest,
 		Plan:    plan,
 		Stages:  []StageResult{},
 	}
@@ -140,7 +144,7 @@ func (o Orchestrator) Execute(request string, options map[string]any) (Execution
 	var previous *StageOutput
 	for _, stage := range plan.Stages {
 		started := time.Now().UTC()
-		stageOutput, err := o.executeStage(stage.Stage, request, previous)
+		stageOutput, err := o.executeStage(stage.Stage, plan.OriginalRequest, previous)
 		record := StageResult{
 			Stage:   stage.Stage,
 			Started: started,
