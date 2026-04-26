@@ -148,7 +148,7 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 }
 
 func llmAnalyzerSystemPrompt() string {
-	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages. Each stage may include an agent contract optimized for the request. If existingAgents contains a similar agent, consider its metrics such as totalRuns, successRuns, failureRuns, successRate, lastStatus, and lastError, then include agentDecision.action as reuse-enhance, rewrite, or separate and explain the reason.`
+	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages. Each stage may include an agent contract optimized for the request. If existingAgents contains a similar agent, consider its lifecycleRecommendation and metrics such as totalRuns, successRuns, failureRuns, successRate, lastStatus, and lastError, then include agentDecision.action as reuse-enhance, rewrite, or separate and explain the reason.`
 }
 
 func (a LLMAnalyzer) llmUserContent(request string) string {
