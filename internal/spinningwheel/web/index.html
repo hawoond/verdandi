@@ -24,6 +24,14 @@
           <input id="speedRange" type="range" min="350" max="1800" step="50" value="1100" />
         </label>
         <p id="eventCounter" class="event-counter">0 / 0 events</p>
+        <section class="agent-roster" aria-label="Active agents">
+          <h2>Agents</h2>
+          <ul id="agentRoster"></ul>
+        </section>
+        <section class="conversation" aria-label="Agent conversation">
+          <h2>Conversation</h2>
+          <ol id="conversationLog"></ol>
+        </section>
         <section class="inspector" id="inspector">
           <h2>Agent</h2>
           <p>Select a run to watch the workspace come alive.</p>
