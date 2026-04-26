@@ -21,6 +21,18 @@ func NewAgentRegistry(path string) AgentRegistry {
 	return AgentRegistry{path: path}
 }
 
+func (r AgentRegistry) List() ([]AgentContract, error) {
+	store, err := r.load()
+	if err != nil {
+		return nil, err
+	}
+	agents := make([]AgentContract, 0, len(store.Agents))
+	for _, agent := range store.Agents {
+		agents = append(agents, cloneAgent(agent))
+	}
+	return agents, nil
+}
+
 func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, error) {
 	store, err := r.load()
 	if err != nil {
@@ -39,8 +51,11 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 		if candidatePolicy := agentPolicyFromMetadata(candidate.Metadata); candidatePolicy != "" {
 			policy = candidatePolicy
 		}
+		if stage.AgentDecision != nil && isAgentPolicy(stage.AgentDecision.Action) {
+			policy = stage.AgentDecision.Action
+		}
 
-		existingIndex, similarity := findSimilarAgent(store.Agents, candidate)
+		existingIndex, similarity := findAgentForDecision(store.Agents, candidate, stage.AgentDecision)
 		hasSimilar := existingIndex >= 0
 		action := policy
 		if !hasSimilar {
@@ -52,6 +67,14 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 			Reason:     agentDecisionReason(action, hasSimilar),
 			Similarity: similarity,
 			Options:    agentPolicyOptions(),
+		}
+		if stage.AgentDecision != nil {
+			if stage.AgentDecision.Reason != "" {
+				decision.Reason = stage.AgentDecision.Reason
+			}
+			if stage.AgentDecision.ExistingAgentName != "" {
+				decision.ExistingAgentName = stage.AgentDecision.ExistingAgentName
+			}
 		}
 		if hasSimilar {
 			decision.ExistingAgentName = store.Agents[existingIndex].Name
@@ -82,6 +105,17 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 		return Plan{}, err
 	}
 	return plan, nil
+}
+
+func findAgentForDecision(agents []AgentContract, candidate AgentContract, decision *AgentLifecycleDecision) (int, float64) {
+	if decision != nil && decision.ExistingAgentName != "" {
+		for index, agent := range agents {
+			if strings.EqualFold(agent.Name, decision.ExistingAgentName) {
+				return index, agentSimilarity(agent, candidate)
+			}
+		}
+	}
+	return findSimilarAgent(agents, candidate)
 }
 
 func (r AgentRegistry) load() (agentRegistryFile, error) {

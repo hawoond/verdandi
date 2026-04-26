@@ -47,7 +47,7 @@ func TestToolsListExposesRunAsDefaultTool(t *testing.T) {
 		names[tool["name"].(string)] = true
 	}
 
-	for _, name := range []string{"run", "analyze", "orchestrate", "get_status", "open_output"} {
+	for _, name := range []string{"run", "analyze", "orchestrate", "get_status", "open_output", "list_agents"} {
 		if !names[name] {
 			t.Fatalf("missing MCP tool %q in %#v", name, names)
 		}

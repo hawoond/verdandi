@@ -168,6 +168,89 @@ func TestLLMAnalyzerParsesDynamicAgentContract(t *testing.T) {
 	}
 }
 
+func TestLLMAnalyzerSendsExistingAgentContext(t *testing.T) {
+	var payload struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": `{"intent":"code-writer","confidence":0.8,"keywords":["접근성"],"complexity":{"level":"LOW","score":2},"stages":[{"stage":"code-writer","keyword":"llm"}]}`,
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	analyzer := NewLLMAnalyzer(LLMAnalyzerConfig{
+		Endpoint: server.URL,
+		Model:    "test-model",
+		APIKey:   "test-key",
+		ExistingAgents: []AgentContract{{
+			Name: "ExistingAccessibilityAgent",
+			Spec: AgentSpec{
+				Role:         "frontend accessibility engineer",
+				Capabilities: []string{"accessibility"},
+			},
+		}},
+	}, NewKeywordAnalyzer(NewOrchestrator(t.TempDir())))
+
+	if _, err := analyzer.Analyze("접근성 좋은 UI 구현"); err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	if len(payload.Messages) < 2 {
+		t.Fatalf("expected messages in payload, got %#v", payload.Messages)
+	}
+	userContent := payload.Messages[len(payload.Messages)-1].Content
+	if !strings.Contains(userContent, "ExistingAccessibilityAgent") {
+		t.Fatalf("expected existing agent context in LLM payload, got %s", userContent)
+	}
+	if !strings.Contains(userContent, AgentPolicyReuseEnhance) || !strings.Contains(userContent, AgentPolicyRewrite) || !strings.Contains(userContent, AgentPolicySeparate) {
+		t.Fatalf("expected lifecycle options in LLM payload, got %s", userContent)
+	}
+}
+
+func TestLLMAnalyzerParsesAgentLifecycleDecision(t *testing.T) {
+	content := `{
+		"intent":"code-writer",
+		"confidence":0.88,
+		"keywords":["접근성","계산기"],
+		"complexity":{"level":"MEDIUM","score":4},
+		"stages":[{
+			"stage":"code-writer",
+			"keyword":"llm",
+			"agent":{
+				"name":"ModernAccessibilityAgent",
+				"spec":{
+					"role":"frontend accessibility engineer",
+					"capabilities":["ui-implementation","accessibility"]
+				}
+			},
+			"agentDecision":{
+				"action":"rewrite",
+				"existingAgentName":"LegacyAccessibilityAgent",
+				"reason":"legacy contract is too narrow"
+			}
+		}]
+	}`
+	result := analyzeWithLLMContent(t, content, "접근성 좋은 계산기 앱 구현")
+
+	decision := result.Plan.Stages[0].AgentDecision
+	if decision == nil {
+		t.Fatalf("expected lifecycle decision in plan: %#v", result.Plan.Stages[0])
+	}
+	if decision.Action != AgentPolicyRewrite || decision.ExistingAgentName != "LegacyAccessibilityAgent" {
+		t.Fatalf("unexpected lifecycle decision: %#v", decision)
+	}
+}
+
 func analyzeWithLLMContent(t *testing.T, content string, request string) AnalysisResult {
 	t.Helper()
 

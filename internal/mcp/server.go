@@ -246,6 +246,12 @@ func defaultTools() []Tool {
 				"runId": map[string]any{"type": "string"},
 			}),
 		},
+		{
+			Name:        "list_agents",
+			Title:       "List Verdandi agents",
+			Description: "List persisted dynamic agent contracts and lifecycle policy options.",
+			InputSchema: objectSchema([]string{}, map[string]any{}),
+		},
 	}
 }
 

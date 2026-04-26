@@ -94,10 +94,11 @@ func (o Orchestrator) NormalizePlan(request string, proposed []StageDef) (Plan, 
 			keyword = "analyzer"
 		}
 		stages = append(stages, StageDef{
-			Stage:   stage.Stage,
-			Keyword: keyword,
-			Order:   stageOrder[stage.Stage],
-			Agent:   normalizeAgentContract(request, stage.Stage, stage.Agent),
+			Stage:         stage.Stage,
+			Keyword:       keyword,
+			Order:         stageOrder[stage.Stage],
+			Agent:         normalizeAgentContract(request, stage.Stage, stage.Agent),
+			AgentDecision: normalizeAgentDecision(stage.AgentDecision),
 		})
 		seen[stage.Stage] = true
 	}
@@ -123,6 +124,18 @@ func (o Orchestrator) NormalizePlan(request string, proposed []StageDef) (Plan, 
 	}
 	plan.Graph = buildGraph(stages)
 	return plan, nil
+}
+
+func normalizeAgentDecision(decision *AgentLifecycleDecision) *AgentLifecycleDecision {
+	if decision == nil {
+		return nil
+	}
+	normalized := *decision
+	if !isAgentPolicy(normalized.Action) {
+		normalized.Action = ""
+	}
+	normalized.Options = agentPolicyOptions()
+	return &normalized
 }
 
 func isAllowedStage(stage string) bool {
