@@ -28,7 +28,7 @@ func (r AgentRegistry) List() ([]AgentContract, error) {
 	}
 	agents := make([]AgentContract, 0, len(store.Agents))
 	for _, agent := range store.Agents {
-		agents = append(agents, cloneAgent(agent))
+		agents = append(agents, enrichAgentRecommendation(cloneAgent(agent)))
 	}
 	return agents, nil
 }
@@ -124,12 +124,40 @@ func (r AgentRegistry) RecordStageResults(stages []StageResult) error {
 			index = len(store.Agents) - 1
 		}
 		store.Agents[index].Metrics = updateAgentMetrics(store.Agents[index].Metrics, stage)
+		store.Agents[index].LifecycleRecommendation = recommendAgentLifecycle(store.Agents[index].Metrics)
 		changed = true
 	}
 	if !changed {
 		return nil
 	}
 	return r.write(store)
+}
+
+func enrichAgentRecommendation(agent AgentContract) AgentContract {
+	agent.LifecycleRecommendation = recommendAgentLifecycle(agent.Metrics)
+	return agent
+}
+
+func recommendAgentLifecycle(metrics AgentMetrics) AgentLifecycleRecommendation {
+	if metrics.TotalRuns >= 2 && metrics.SuccessRate <= 0.25 {
+		return AgentLifecycleRecommendation{
+			Action: AgentPolicyRewrite,
+			Reason: "agent has repeated failures; prefer rewriting before reuse",
+			Score:  1 - metrics.SuccessRate,
+		}
+	}
+	if metrics.TotalRuns >= 2 && metrics.SuccessRate >= 0.8 {
+		return AgentLifecycleRecommendation{
+			Action: AgentPolicyReuseEnhance,
+			Reason: "agent has a strong success record; prefer reuse and enhancement",
+			Score:  metrics.SuccessRate,
+		}
+	}
+	return AgentLifecycleRecommendation{
+		Action: AgentPolicySeparate,
+		Reason: "agent does not have enough performance evidence for reuse or rewrite",
+		Score:  metrics.SuccessRate,
+	}
 }
 
 func findAgentForDecision(agents []AgentContract, candidate AgentContract, decision *AgentLifecycleDecision) (int, float64) {

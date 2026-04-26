@@ -592,6 +592,58 @@ func TestToolRecordsFailedAgentPerformance(t *testing.T) {
 	}
 }
 
+func TestToolListAgentsIncludesLifecycleRecommendations(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAgentRegistry(filepath.Join(dataDir, "agents.json"))
+	reliable := AgentContract{
+		Name: "ReliableAccessibilityAgent",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility"},
+		},
+	}
+	unstable := AgentContract{
+		Name: "UnstableTesterAgent",
+		Spec: AgentSpec{
+			Role:         "test engineer",
+			Capabilities: []string{"validation"},
+		},
+	}
+	if err := registry.RecordStageResults([]StageResult{
+		{Stage: "code-writer", Status: "success", Agent: &reliable},
+		{Stage: "code-writer", Status: "success", Agent: &reliable},
+		{Stage: "code-writer", Status: "success", Agent: &reliable},
+		{Stage: "tester", Status: "error", Error: "validation failed", Agent: &unstable},
+		{Stage: "tester", Status: "error", Error: "validation failed", Agent: &unstable},
+	}); err != nil {
+		t.Fatalf("record stage results failed: %v", err)
+	}
+
+	successTool := NewTool(Options{DataDir: dataDir})
+	listed, err := successTool.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents failed: %v", err)
+	}
+	agents := listed["agents"].([]AgentContract)
+	reliableAgent := findAgentForTest(agents, "ReliableAccessibilityAgent")
+	if reliableAgent == nil {
+		t.Fatalf("expected reliable agent in %#v", agents)
+	}
+	if reliableAgent.LifecycleRecommendation.Action != AgentPolicyReuseEnhance {
+		t.Fatalf("expected reliable agent to recommend reuse, got %#v", reliableAgent.LifecycleRecommendation)
+	}
+	unstableAgent := findAgentForTest(agents, "UnstableTesterAgent")
+	if unstableAgent == nil {
+		t.Fatalf("expected unstable agent in %#v", agents)
+	}
+	if unstableAgent.LifecycleRecommendation.Action != AgentPolicyRewrite {
+		t.Fatalf("expected unstable agent to recommend rewrite, got %#v", unstableAgent.LifecycleRecommendation)
+	}
+	if unstableAgent.LifecycleRecommendation.Reason == "" {
+		t.Fatalf("expected recommendation reason, got %#v", unstableAgent.LifecycleRecommendation)
+	}
+}
+
 func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 	dataDir := t.TempDir()
 	userMessages := []string{}
@@ -641,6 +693,9 @@ func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 	if !strings.Contains(userMessages[1], "successRate") {
 		t.Fatalf("expected second LLM request to include agent performance metrics, got %s", userMessages[1])
 	}
+	if !strings.Contains(userMessages[1], "lifecycleRecommendation") {
+		t.Fatalf("expected second LLM request to include lifecycle recommendation, got %s", userMessages[1])
+	}
 }
 
 func analyzerForAgentPlan(t *testing.T, dataDir string, request string, agent AgentContract) Analyzer {
@@ -671,4 +726,13 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func findAgentForTest(agents []AgentContract, name string) *AgentContract {
+	for index := range agents {
+		if agents[index].Name == name {
+			return &agents[index]
+		}
+	}
+	return nil
 }

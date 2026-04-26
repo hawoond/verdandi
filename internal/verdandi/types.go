@@ -36,13 +36,14 @@ type KeywordFrequency struct {
 }
 
 type AgentContract struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Command     string            `json:"command"`
-	Spec        AgentSpec         `json:"spec"`
-	Metadata    map[string]any    `json:"metadata"`
-	Inputs      map[string]string `json:"inputs"`
-	Metrics     AgentMetrics      `json:"metrics,omitempty"`
+	Name                    string                       `json:"name"`
+	Description             string                       `json:"description"`
+	Command                 string                       `json:"command"`
+	Spec                    AgentSpec                    `json:"spec"`
+	Metadata                map[string]any               `json:"metadata"`
+	Inputs                  map[string]string            `json:"inputs"`
+	Metrics                 AgentMetrics                 `json:"metrics,omitempty"`
+	LifecycleRecommendation AgentLifecycleRecommendation `json:"lifecycleRecommendation,omitempty"`
 }
 
 type AgentSpec struct {
@@ -58,6 +59,12 @@ type AgentMetrics struct {
 	LastStatus  string    `json:"lastStatus,omitempty"`
 	LastError   string    `json:"lastError,omitempty"`
 	LastRunAt   time.Time `json:"lastRunAt,omitempty"`
+}
+
+type AgentLifecycleRecommendation struct {
+	Action string  `json:"action,omitempty"`
+	Reason string  `json:"reason,omitempty"`
+	Score  float64 `json:"score,omitempty"`
 }
 
 type StageDef struct {
