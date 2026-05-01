@@ -187,6 +187,119 @@ func TestServerStreamsEventsAppendedAfterConnection(t *testing.T) {
 	t.Fatalf("expected live stream to include appended run-started event")
 }
 
+func TestServerStreamsHeartbeatWhenFollowing(t *testing.T) {
+	dataDir := t.TempDir()
+	runID := "run_heartbeat_test"
+	if err := verdandi.NewEventStoreForDataDir(dataDir).Reset(runID); err != nil {
+		t.Fatalf("reset events: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dataDir).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/runs/"+runID+"/events/stream?follow=1", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("get stream: %v", err)
+	}
+	defer response.Body.Close()
+
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), ": heartbeat") {
+			return
+		}
+	}
+	t.Fatalf("expected heartbeat comment from stream")
+}
+
+func TestServerStreamsEventsAfterCursor(t *testing.T) {
+	dataDir := t.TempDir()
+	runID := "run_cursor_test"
+	store := verdandi.NewEventStoreForDataDir(dataDir)
+	if err := store.Save(runID, []verdandi.VisualizationEvent{
+		{RunID: runID, Type: verdandi.EventRunStarted, Timestamp: time.Unix(1, 0).UTC()},
+		{RunID: runID, Type: verdandi.EventRunCompleted, Timestamp: time.Unix(2, 0).UTC()},
+	}); err != nil {
+		t.Fatalf("save events: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dataDir).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/runs/" + runID + "/events/stream?cursor=1")
+	if err != nil {
+		t.Fatalf("get stream: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	stream := string(body)
+	if strings.Contains(stream, `"type":"run-started"`) {
+		t.Fatalf("expected cursor to skip first event, got %s", stream)
+	}
+	if !strings.Contains(stream, `"type":"run-completed"`) {
+		t.Fatalf("expected cursor to include second event, got %s", stream)
+	}
+}
+
+func TestServerReturnsPluginStatus(t *testing.T) {
+	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/plugin")
+	if err != nil {
+		t.Fatalf("get plugin: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from plugin status, got %s", response.Status)
+	}
+
+	var payload struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+		Status  string `json:"status"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode plugin status: %v", err)
+	}
+	if payload.Name != "Spinning Wheel" || !payload.Enabled || payload.Status != "ready" {
+		t.Fatalf("unexpected plugin status: %#v", payload)
+	}
+}
+
+func TestServerHealth(t *testing.T) {
+	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from health, got %s", response.Status)
+	}
+
+	var payload struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if !payload.OK {
+		t.Fatalf("expected healthy server")
+	}
+}
+
 func TestServerServesSpinningWheelUI(t *testing.T) {
 	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
 	defer server.Close()
@@ -206,7 +319,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 	if !strings.Contains(string(body), "Spinning Wheel") {
 		t.Fatalf("expected Spinning Wheel UI, got %s", string(body))
 	}
-	for _, expected := range []string{"playPauseButton", "stepButton", "speedRange", "eventCounter", "agentRoster", "conversationLog", "liveStatus"} {
+	for _, expected := range []string{"playPauseButton", "stepButton", "speedRange", "eventCounter", "agentRoster", "conversationLog", "liveStatus", "stageFilter", "focusModeButton", "clearFocusButton"} {
 		if !strings.Contains(string(body), expected) {
 			t.Fatalf("expected UI shell to contain %q", expected)
 		}
@@ -225,7 +338,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 		t.Fatalf("read app asset: %v", err)
 	}
 	app := string(assetBody)
-	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent", "drawDecisionLinks", "activeStage", "stepForward", "playbackDelay", "renderAgentRoster", "appendConversation", "connectLiveStream", "EventSource"} {
+	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent", "drawDecisionLinks", "activeStage", "stepForward", "playbackDelay", "renderAgentRoster", "appendConversation", "connectLiveStream", "EventSource", "applyStageFilter", "focusedAgentName", "setFocusedAgent"} {
 		if !strings.Contains(app, expected) {
 			t.Fatalf("expected app asset to contain %q", expected)
 		}

@@ -5,6 +5,9 @@ const replayButton = document.getElementById("replayButton");
 const playPauseButton = document.getElementById("playPauseButton");
 const stepButton = document.getElementById("stepButton");
 const speedRange = document.getElementById("speedRange");
+const stageFilter = document.getElementById("stageFilter");
+const focusModeButton = document.getElementById("focusModeButton");
+const clearFocusButton = document.getElementById("clearFocusButton");
 const eventCounter = document.getElementById("eventCounter");
 const liveStatus = document.getElementById("liveStatus");
 const agentRoster = document.getElementById("agentRoster");
@@ -36,6 +39,8 @@ let replayIndex = 0;
 let isPlaying = false;
 let activeStage = "";
 let activeAgentName = "";
+let selectedStage = "";
+let focusedAgentName = "";
 let decisionLinks = [];
 let conversationItems = [];
 let liveStream = null;
@@ -128,11 +133,15 @@ function drawDecisionLinks(now) {
 }
 
 function drawAgent(agent, now) {
+  const unfocused = focusedAgentName && agent.name !== focusedAgentName;
   const point = scalePoint(agent.position);
   const target = scalePoint(agent.targetPosition || agent.position);
   const spawnAge = now - agent.spawnedAt;
   const spawnScale = Math.min(1, easeOutBack(Math.max(0, spawnAge) / 520));
   const moving = agent.moveStartedAt && now - agent.moveStartedAt < agent.moveDuration;
+
+  ctx.save();
+  ctx.globalAlpha = unfocused ? 0.34 : 1;
 
   if (moving) {
     ctx.save();
@@ -190,6 +199,7 @@ function drawAgent(agent, now) {
       ctx.fillText(agent.message.slice(28, 52), point.x, point.y - 45);
     }
   }
+  ctx.restore();
 }
 
 function animationLoop(now) {
@@ -283,6 +293,7 @@ async function loadEvents(runId) {
   isPlaying = false;
   activeStage = "";
   activeAgentName = "";
+  focusedAgentName = "";
   decisionLinks = [];
   conversationItems = [];
   timeline.innerHTML = "";
@@ -300,6 +311,7 @@ function replay() {
   isPlaying = true;
   activeStage = "";
   activeAgentName = "";
+  focusedAgentName = "";
   decisionLinks = [];
   conversationItems = [];
   timeline.innerHTML = "";
@@ -317,7 +329,8 @@ function connectLiveStream(runId) {
   }
   liveEventKeys = new Set(events.map(eventKey));
   updateLiveStatus("Live: connecting", false);
-  liveStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events/stream?follow=1`);
+  const cursor = events.length;
+  liveStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events/stream?follow=1&cursor=${cursor}`);
   liveStream.addEventListener("open", () => updateLiveStatus("Live: connected", true));
   liveStream.addEventListener("error", () => updateLiveStatus("Live: reconnecting", false));
   liveStream.addEventListener("visualization-event", (message) => {
@@ -440,6 +453,19 @@ function applyEvent(event) {
   appendTimeline(event);
 }
 
+function applyStageFilter(event) {
+  if (!selectedStage) {
+    return true;
+  }
+  return event.stage === selectedStage || !event.stage;
+}
+
+function setFocusedAgent(name) {
+  focusedAgentName = name || "";
+  draw(performance.now());
+  renderAgentRoster();
+}
+
 function registerDecisionLink(event, current) {
   if (!event.decision || !event.decision.existingAgentName) {
     return;
@@ -477,6 +503,9 @@ function spawnPosition(index) {
 }
 
 function appendTimeline(event) {
+  if (!applyStageFilter(event)) {
+    return;
+  }
   const item = document.createElement("li");
   const label = event.agent ? event.agent.name : event.runId;
   item.innerHTML = `<strong>${escapeHTML(event.type)}</strong><span>${escapeHTML(label)}</span><p>${escapeHTML(event.message || event.stage || "")}</p>`;
@@ -485,6 +514,9 @@ function appendTimeline(event) {
 }
 
 function appendConversation(event, agent) {
+  if (!applyStageFilter(event)) {
+    return;
+  }
   const speaker = agent ? agent.name : "Spinning Wheel";
   const message = agent ? speechForEvent(event) : event.message || event.type;
   conversationItems.push({
@@ -508,18 +540,38 @@ function renderConversation() {
   conversationLog.scrollTop = conversationLog.scrollHeight;
 }
 
+function rebuildFilteredLogs() {
+  timeline.innerHTML = "";
+  conversationItems = [];
+  events.slice(0, replayIndex).forEach((event) => {
+    appendTimeline(event);
+    appendConversation(event, event.agent ? agents.get(event.agent.name) : null);
+  });
+}
+
 function renderAgentRoster() {
   if (agents.size === 0) {
     agentRoster.innerHTML = `<li><span>No active agents yet.</span></li>`;
     return;
   }
   agentRoster.innerHTML = Array.from(agents.values()).map((agent) => `
-    <li class="${agent.name === activeAgentName ? "is-active" : ""}">
+    <li class="${rosterClasses(agent)}" data-agent="${escapeHTML(agent.name)}">
       <strong>${animalGlyphs[agent.avatar] || "🐾"} ${escapeHTML(agent.name)}</strong>
       <span>${escapeHTML(agent.role || "agent")} · ${escapeHTML(agent.status || "active")}</span>
       <span>${escapeHTML(agent.message || "")}</span>
     </li>
   `).join("");
+}
+
+function rosterClasses(agent) {
+  const classes = [];
+  if (agent.name === activeAgentName) {
+    classes.push("is-active");
+  }
+  if (agent.name === focusedAgentName) {
+    classes.push("is-focused");
+  }
+  return classes.join(" ");
 }
 
 function renderInspector(agent) {
@@ -554,6 +606,18 @@ speedRange.addEventListener("input", () => {
   }
   clearInterval(replayTimer);
   replayTimer = setInterval(stepForward, playbackDelay());
+});
+stageFilter.addEventListener("change", () => {
+  selectedStage = stageFilter.value;
+  rebuildFilteredLogs();
+});
+focusModeButton.addEventListener("click", () => setFocusedAgent(activeAgentName));
+clearFocusButton.addEventListener("click", () => setFocusedAgent(""));
+agentRoster.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-agent]");
+  if (item) {
+    setFocusedAgent(item.dataset.agent);
+  }
 });
 window.addEventListener("resize", resizeCanvas);
 

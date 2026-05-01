@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ func NewServer(dataDir string) Server {
 
 func (s Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/plugin", s.handlePlugin)
+	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/runs/", s.handleRunEvents)
 	webRoot, err := fs.Sub(webFiles, "web")
@@ -36,6 +39,26 @@ func (s Server) Handler() http.Handler {
 	}
 	mux.Handle("/", http.FileServer(http.FS(webRoot)))
 	return mux
+}
+
+func (s Server) handlePlugin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"name":    "Spinning Wheel",
+		"enabled": true,
+		"status":  "ready",
+	})
+}
+
+func (s Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s Server) handleRuns(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +114,8 @@ func (s Server) streamRunEvents(w http.ResponseWriter, r *http.Request, runID st
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
-	for _, event := range events {
+	cursor := parseCursor(r.URL.Query().Get("cursor"), len(events))
+	for _, event := range events[cursor:] {
 		if err := writeSSE(w, event); err != nil {
 			return
 		}
@@ -112,6 +136,13 @@ func (s Server) streamRunEvents(w http.ResponseWriter, r *http.Request, runID st
 			latest, err := verdandi.NewEventStoreForDataDir(s.dataDir).List(runID)
 			if err != nil {
 				return
+			}
+			if len(latest) == seen {
+				if err := writeHeartbeat(w); err != nil {
+					return
+				}
+				flusher.Flush()
+				continue
 			}
 			for _, event := range latest[seen:] {
 				if err := writeSSE(w, event); err != nil {
@@ -152,6 +183,20 @@ func eventStreamRunID(path string) (string, bool) {
 	return runID, true
 }
 
+func parseCursor(raw string, max int) int {
+	if raw == "" {
+		return 0
+	}
+	cursor, err := strconv.Atoi(raw)
+	if err != nil || cursor < 0 {
+		return 0
+	}
+	if cursor > max {
+		return max
+	}
+	return cursor
+}
+
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
@@ -172,5 +217,10 @@ func writeSSE(w http.ResponseWriter, event verdandi.VisualizationEvent) error {
 		return err
 	}
 	_, err = w.Write([]byte("\n\n"))
+	return err
+}
+
+func writeHeartbeat(w http.ResponseWriter) error {
+	_, err := w.Write([]byte(": heartbeat\n\n"))
 	return err
 }
