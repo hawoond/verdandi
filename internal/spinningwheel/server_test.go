@@ -187,6 +187,69 @@ func TestServerStreamsEventsAppendedAfterConnection(t *testing.T) {
 	t.Fatalf("expected live stream to include appended run-started event")
 }
 
+func TestServerStreamsHeartbeatWhenFollowing(t *testing.T) {
+	dataDir := t.TempDir()
+	runID := "run_heartbeat_test"
+	if err := verdandi.NewEventStoreForDataDir(dataDir).Reset(runID); err != nil {
+		t.Fatalf("reset events: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dataDir).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/runs/"+runID+"/events/stream?follow=1", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("get stream: %v", err)
+	}
+	defer response.Body.Close()
+
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), ": heartbeat") {
+			return
+		}
+	}
+	t.Fatalf("expected heartbeat comment from stream")
+}
+
+func TestServerStreamsEventsAfterCursor(t *testing.T) {
+	dataDir := t.TempDir()
+	runID := "run_cursor_test"
+	store := verdandi.NewEventStoreForDataDir(dataDir)
+	if err := store.Save(runID, []verdandi.VisualizationEvent{
+		{RunID: runID, Type: verdandi.EventRunStarted, Timestamp: time.Unix(1, 0).UTC()},
+		{RunID: runID, Type: verdandi.EventRunCompleted, Timestamp: time.Unix(2, 0).UTC()},
+	}); err != nil {
+		t.Fatalf("save events: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(dataDir).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/runs/" + runID + "/events/stream?cursor=1")
+	if err != nil {
+		t.Fatalf("get stream: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	stream := string(body)
+	if strings.Contains(stream, `"type":"run-started"`) {
+		t.Fatalf("expected cursor to skip first event, got %s", stream)
+	}
+	if !strings.Contains(stream, `"type":"run-completed"`) {
+		t.Fatalf("expected cursor to include second event, got %s", stream)
+	}
+}
+
 func TestServerReturnsPluginStatus(t *testing.T) {
 	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
 	defer server.Close()

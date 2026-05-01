@@ -317,7 +317,8 @@ function connectLiveStream(runId) {
   }
   liveEventKeys = new Set(events.map(eventKey));
   updateLiveStatus("Live: connecting", false);
-  liveStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events/stream?follow=1`);
+  const cursor = events.length;
+  liveStream = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events/stream?follow=1&cursor=${cursor}`);
   liveStream.addEventListener("open", () => updateLiveStatus("Live: connected", true));
   liveStream.addEventListener("error", () => updateLiveStatus("Live: reconnecting", false));
   liveStream.addEventListener("visualization-event", (message) => {
