@@ -319,7 +319,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 	if !strings.Contains(string(body), "Spinning Wheel") {
 		t.Fatalf("expected Spinning Wheel UI, got %s", string(body))
 	}
-	for _, expected := range []string{"playPauseButton", "stepButton", "speedRange", "eventCounter", "agentRoster", "conversationLog", "liveStatus"} {
+	for _, expected := range []string{"playPauseButton", "stepButton", "speedRange", "eventCounter", "agentRoster", "conversationLog", "liveStatus", "stageFilter", "focusModeButton", "clearFocusButton"} {
 		if !strings.Contains(string(body), expected) {
 			t.Fatalf("expected UI shell to contain %q", expected)
 		}
@@ -338,7 +338,7 @@ func TestServerServesSpinningWheelUI(t *testing.T) {
 		t.Fatalf("read app asset: %v", err)
 	}
 	app := string(assetBody)
-	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent", "drawDecisionLinks", "activeStage", "stepForward", "playbackDelay", "renderAgentRoster", "appendConversation", "connectLiveStream", "EventSource"} {
+	for _, expected := range []string{"requestAnimationFrame", "moveAgentTo", "spawnedAt", "agent-spawned", "speechForEvent", "drawDecisionLinks", "activeStage", "stepForward", "playbackDelay", "renderAgentRoster", "appendConversation", "connectLiveStream", "EventSource", "applyStageFilter", "focusedAgentName", "setFocusedAgent"} {
 		if !strings.Contains(app, expected) {
 			t.Fatalf("expected app asset to contain %q", expected)
 		}

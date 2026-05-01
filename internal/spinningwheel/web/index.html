@@ -23,6 +23,21 @@
           <span>Speed</span>
           <input id="speedRange" type="range" min="350" max="1800" step="50" value="1100" />
         </label>
+        <label class="filter-control" for="stageFilter">
+          <span>Stage</span>
+          <select id="stageFilter" aria-label="Stage filter">
+            <option value="">All stages</option>
+            <option value="planner">planner</option>
+            <option value="code-writer">code-writer</option>
+            <option value="tester">tester</option>
+            <option value="documenter">documenter</option>
+            <option value="deployer">deployer</option>
+          </select>
+        </label>
+        <div class="controls">
+          <button id="focusModeButton" type="button">Focus</button>
+          <button id="clearFocusButton" type="button">Clear</button>
+        </div>
         <p id="eventCounter" class="event-counter">0 / 0 events</p>
         <p id="liveStatus" class="live-status is-offline">Live: disconnected</p>
         <section class="agent-roster" aria-label="Active agents">

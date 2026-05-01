@@ -83,7 +83,8 @@ button {
   min-width: 0;
 }
 
-.speed-control {
+.speed-control,
+.filter-control {
   display: grid;
   gap: 8px;
   color: #38443b;
@@ -159,6 +160,11 @@ button {
 .agent-roster li.is-active {
   border-color: #2e6f50;
   box-shadow: inset 4px 0 0 #2e6f50;
+}
+
+.agent-roster li.is-focused {
+  border-color: #5c6ac4;
+  box-shadow: inset 4px 0 0 #5c6ac4;
 }
 
 .agent-roster strong,
