@@ -14,9 +14,14 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
 	flag.Parse()
 
-	server := spinningwheel.NewServer(*dataDir)
-	fmt.Fprintf(os.Stderr, "Spinning Wheel listening on http://%s\n", *addr)
-	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
+	config := spinningwheel.DefaultConfig().
+		WithDataDir(*dataDir).
+		WithAddr(*addr).
+		WithEnabled(true)
+
+	server := spinningwheel.NewServer(config.DataDir)
+	fmt.Fprintf(os.Stderr, "%s listening on http://%s\n", config.Name, config.Addr)
+	if err := http.ListenAndServe(config.Addr, server.Handler()); err != nil {
 		fmt.Fprintf(os.Stderr, "spinning wheel server error: %v\n", err)
 		os.Exit(1)
 	}
