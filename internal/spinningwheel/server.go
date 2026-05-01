@@ -28,6 +28,8 @@ func NewServer(dataDir string) Server {
 
 func (s Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/plugin", s.handlePlugin)
+	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/runs/", s.handleRunEvents)
 	webRoot, err := fs.Sub(webFiles, "web")
@@ -36,6 +38,26 @@ func (s Server) Handler() http.Handler {
 	}
 	mux.Handle("/", http.FileServer(http.FS(webRoot)))
 	return mux
+}
+
+func (s Server) handlePlugin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"name":    "Spinning Wheel",
+		"enabled": true,
+		"status":  "ready",
+	})
+}
+
+func (s Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s Server) handleRuns(w http.ResponseWriter, r *http.Request) {

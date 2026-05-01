@@ -187,6 +187,56 @@ func TestServerStreamsEventsAppendedAfterConnection(t *testing.T) {
 	t.Fatalf("expected live stream to include appended run-started event")
 }
 
+func TestServerReturnsPluginStatus(t *testing.T) {
+	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/plugin")
+	if err != nil {
+		t.Fatalf("get plugin: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from plugin status, got %s", response.Status)
+	}
+
+	var payload struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+		Status  string `json:"status"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode plugin status: %v", err)
+	}
+	if payload.Name != "Spinning Wheel" || !payload.Enabled || payload.Status != "ready" {
+		t.Fatalf("unexpected plugin status: %#v", payload)
+	}
+}
+
+func TestServerHealth(t *testing.T) {
+	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from health, got %s", response.Status)
+	}
+
+	var payload struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if !payload.OK {
+		t.Fatalf("expected healthy server")
+	}
+}
+
 func TestServerServesSpinningWheelUI(t *testing.T) {
 	server := httptest.NewServer(NewServer(t.TempDir()).Handler())
 	defer server.Close()
