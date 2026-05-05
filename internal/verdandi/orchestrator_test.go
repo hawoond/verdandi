@@ -1,6 +1,8 @@
 package verdandi
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,11 +79,14 @@ func TestExecuteGeneratesRunnableGoProjectArtifacts(t *testing.T) {
 	}
 
 	wantFiles := map[string]bool{
-		"requirements.md": false,
-		"go.mod":          false,
-		"main.go":         false,
-		"main_test.go":    false,
-		"README.md":       false,
+		"requirements.md":        false,
+		"acceptance-criteria.md": false,
+		"task-breakdown.md":      false,
+		"risks.md":               false,
+		"go.mod":                 false,
+		"main.go":                false,
+		"main_test.go":           false,
+		"README.md":              false,
 	}
 	for _, file := range result.Summary.Files {
 		if _, ok := wantFiles[file.Name]; ok {
@@ -104,9 +109,30 @@ func TestExecuteGeneratesRunnableGoProjectArtifacts(t *testing.T) {
 	}
 
 	requirements := read("requirements.md")
-	for _, want := range []string{"# Requirements", "## Goal", "## Workflow", "## Acceptance Criteria"} {
+	for _, want := range []string{"# Requirements", "## Goal", "## Functional Requirements", "## Non-Goals"} {
 		if !strings.Contains(requirements, want) {
 			t.Fatalf("requirements missing %q:\n%s", want, requirements)
+		}
+	}
+
+	acceptanceCriteria := read("acceptance-criteria.md")
+	for _, want := range []string{"# Acceptance Criteria", "## Functional Validation", "## Quality Gates"} {
+		if !strings.Contains(acceptanceCriteria, want) {
+			t.Fatalf("acceptance criteria missing %q:\n%s", want, acceptanceCriteria)
+		}
+	}
+
+	taskBreakdown := read("task-breakdown.md")
+	for _, want := range []string{"# Task Breakdown", "## Implementation Tasks", "## Suggested Order"} {
+		if !strings.Contains(taskBreakdown, want) {
+			t.Fatalf("task breakdown missing %q:\n%s", want, taskBreakdown)
+		}
+	}
+
+	risks := read("risks.md")
+	for _, want := range []string{"# Risks", "## Assumptions", "## Open Questions"} {
+		if !strings.Contains(risks, want) {
+			t.Fatalf("risks missing %q:\n%s", want, risks)
 		}
 	}
 
@@ -156,6 +182,21 @@ func TestRunValidationReportsGoTestFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "go test failed") {
 		t.Fatalf("expected go test failure message, got %v", err)
+	}
+}
+
+func TestRunValidationHonorsCanceledContext(t *testing.T) {
+	outputDir := t.TempDir()
+	writeFile(t, outputDir, "go.mod", "module generated-project\n\ngo 1.22\n")
+	writeFile(t, outputDir, "main.go", "package main\n\nfunc main() {}\n")
+	writeFile(t, outputDir, "main_test.go", "package main\n\nimport \"testing\"\n\nfunc TestPass(t *testing.T) {}\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := runValidationContext(ctx, outputDir)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
 

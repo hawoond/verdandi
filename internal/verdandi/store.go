@@ -24,6 +24,10 @@ func NewStoreForDataDir(dataDir string) Store {
 }
 
 func (s Store) Save(record RunRecord) error {
+	lock := lockForPath(s.path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	store, err := s.load()
 	if err != nil {
 		return err
@@ -91,5 +95,5 @@ func (s Store) write(store runStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	return writeFileAtomic(s.path, data, 0o644)
 }

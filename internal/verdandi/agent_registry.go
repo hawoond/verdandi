@@ -40,6 +40,10 @@ func (r AgentRegistry) List() ([]AgentContract, error) {
 }
 
 func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, error) {
+	lock := lockForPath(r.path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	store, err := r.load()
 	if err != nil {
 		return Plan{}, err
@@ -111,6 +115,10 @@ func (r AgentRegistry) ResolvePlan(plan Plan, options map[string]any) (Plan, err
 }
 
 func (r AgentRegistry) RecordStageResults(stages []StageResult) error {
+	lock := lockForPath(r.path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	store, err := r.load()
 	if err != nil {
 		return err
@@ -275,7 +283,7 @@ func (r AgentRegistry) write(store agentRegistryFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.path, data, 0o644)
+	return writeFileAtomic(r.path, data, 0o644)
 }
 
 func agentPolicy(options map[string]any) string {
@@ -347,7 +355,7 @@ func findSimilarAgent(agents []AgentContract, candidate AgentContract) (int, flo
 			bestScore = score
 		}
 	}
-	if bestScore < 0.34 {
+	if bestScore < 0.30 {
 		return -1, bestScore
 	}
 	return bestIndex, bestScore
@@ -365,11 +373,13 @@ func agentSimilarity(a AgentContract, b AgentContract) float64 {
 			common++
 		}
 	}
-	denominator := len(left)
-	if len(right) < denominator {
-		denominator = len(right)
+	union := len(left)
+	for term := range right {
+		if !left[term] {
+			union++
+		}
 	}
-	return float64(common) / float64(denominator)
+	return float64(common) / float64(union)
 }
 
 func agentTerms(agent AgentContract) map[string]bool {

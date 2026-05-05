@@ -1,10 +1,12 @@
 package verdandi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,14 @@ type Tool struct {
 	agents       AgentRegistry
 	events       EventStore
 }
+
+type ProgressEvent struct {
+	Progress int
+	Total    int
+	Message  string
+}
+
+type ProgressReporter func(ProgressEvent)
 
 func NewTool(options Options) Tool {
 	dataDir := options.DataDir
@@ -96,6 +106,17 @@ func (t Tool) Analyze(request string) (map[string]any, error) {
 }
 
 func (t Tool) Run(request string, options ...map[string]any) (map[string]any, error) {
+	return t.RunContext(context.Background(), request, nil, options...)
+}
+
+func (t Tool) RunWithProgress(request string, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
+	return t.RunContext(context.Background(), request, reporter, options...)
+}
+
+func (t Tool) RunContext(ctx context.Context, request string, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(request) == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
 	runOptions := map[string]any{}
 	if len(options) > 0 && options[0] != nil {
 		runOptions = options[0]
@@ -108,6 +129,62 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
+	return t.executePlan(ctx, request, plan, runOptions, analysis.Source, analysis.FallbackReason, "run", reporter)
+}
+
+func (t Tool) RunPlan(request string, stages []StageDef, options ...map[string]any) (map[string]any, error) {
+	return t.RunPlanContext(context.Background(), request, stages, nil, options...)
+}
+
+func (t Tool) RunPlanWithProgress(request string, stages []StageDef, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
+	return t.RunPlanContext(context.Background(), request, stages, reporter, options...)
+}
+
+func (t Tool) RunPlanContext(ctx context.Context, request string, stages []StageDef, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(request) == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
+	runOptions := map[string]any{}
+	if len(options) > 0 && options[0] != nil {
+		runOptions = options[0]
+	}
+	plan, err := t.normalizeClientPlan(request, stages)
+	if err != nil {
+		return nil, err
+	}
+	plan, err = t.agents.ResolvePlan(plan, runOptions)
+	if err != nil {
+		return nil, err
+	}
+	return t.executePlan(ctx, request, plan, runOptions, AnalyzerClient, "", "run_plan", reporter)
+}
+
+func (t Tool) ValidatePlan(request string, stages []StageDef) (map[string]any, error) {
+	if strings.TrimSpace(request) == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
+	plan, err := t.normalizeClientPlan(request, stages)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":         true,
+		"action":     "validate_plan",
+		"request":    request,
+		"stageCount": plan.StageCount,
+		"plan":       plan,
+		"analyzer":   AnalyzerClient,
+	}, nil
+}
+
+func (t Tool) normalizeClientPlan(request string, stages []StageDef) (Plan, error) {
+	if len(stages) == 0 {
+		return Plan{}, fmt.Errorf("stages 배열이 필요합니다")
+	}
+	return t.orchestrator.NormalizePlan(request, stages)
+}
+
+func (t Tool) executePlan(ctx context.Context, request string, plan Plan, runOptions map[string]any, analyzer string, fallbackReason string, action string, reporter ProgressReporter) (map[string]any, error) {
 	runID := createRunID()
 	createdAt := time.Now().UTC()
 	if err := t.events.Reset(runID); err != nil {
@@ -116,16 +193,20 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if err := t.events.Append(runStartedEvent(runID, "running", request, createdAt)); err != nil {
 		return nil, err
 	}
-
+	totalStages := len(plan.Stages)
 	var eventErr error
-	result, err := t.orchestrator.ExecutePlanWithObserver(plan, runOptions, func(phase StageLifecyclePhase, stage StageResult) {
+	completedStages := 0
+	result, err := t.orchestrator.ExecutePlanWithObserverContext(ctx, plan, runOptions, func(phase StageLifecyclePhase, stage StageResult) {
 		if eventErr != nil {
 			return
 		}
 		switch phase {
 		case StageLifecycleStarted:
+			reportProgress(reporter, completedStages, totalStages, fmt.Sprintf("%s started", stage.Stage))
 			eventErr = t.events.AppendMany(stageStartedEvents(runID, stage))
 		case StageLifecycleCompleted:
+			completedStages++
+			reportProgress(reporter, completedStages, totalStages, fmt.Sprintf("%s completed", stage.Stage))
 			eventErr = t.events.AppendMany(stageCompletedEvents(runID, stage))
 		}
 	})
@@ -135,10 +216,16 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	result.Analyzer = analysis.Source
-	result.FallbackReason = analysis.FallbackReason
+	result.Analyzer = analyzer
+	result.FallbackReason = fallbackReason
 	if err := t.agents.RecordStageResults(result.Stages); err != nil {
 		return nil, err
+	}
+	result.Stages = t.stagesWithCurrentAgentMetrics(result.Stages)
+	for _, stage := range result.Stages {
+		if err := t.events.AppendMany(metricsUpdatedEvents(runID, stage)); err != nil {
+			return nil, err
+		}
 	}
 
 	status := "success"
@@ -167,7 +254,7 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 
 	response := map[string]any{
 		"ok":        status == "success",
-		"action":    "run",
+		"action":    action,
 		"runId":     record.RunID,
 		"status":    record.Status,
 		"request":   request,
@@ -179,6 +266,37 @@ func (t Tool) Run(request string, options ...map[string]any) (map[string]any, er
 		response["fallbackReason"] = record.FallbackReason
 	}
 	return response, nil
+}
+
+func reportProgress(reporter ProgressReporter, progress int, total int, message string) {
+	if reporter == nil {
+		return
+	}
+	reporter(ProgressEvent{Progress: progress, Total: total, Message: message})
+}
+
+func (t Tool) stagesWithCurrentAgentMetrics(stages []StageResult) []StageResult {
+	agents, err := t.agents.List()
+	if err != nil {
+		return stages
+	}
+	agentsByName := map[string]AgentContract{}
+	for _, agent := range agents {
+		agentsByName[agent.Name] = agent
+	}
+	updated := make([]StageResult, len(stages))
+	copy(updated, stages)
+	for index := range updated {
+		if updated[index].Agent == nil {
+			continue
+		}
+		agent, ok := agentsByName[updated[index].Agent.Name]
+		if !ok {
+			continue
+		}
+		updated[index].Agent = &agent
+	}
+	return updated
 }
 
 func (t Tool) analyzeRequest(request string) (AnalysisResult, error) {
@@ -193,7 +311,7 @@ func (t Tool) analyzeRequest(request string) (AnalysisResult, error) {
 }
 
 func (t Tool) Orchestrate(request string, options map[string]any) (map[string]any, error) {
-	result, err := t.Run(request, options)
+	result, err := t.RunWithProgress(request, nil, options)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +357,36 @@ func (t Tool) ListAgents() (map[string]any, error) {
 	}, nil
 }
 
+func (t Tool) ListRuns() (map[string]any, error) {
+	runs, err := t.store.List()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":     true,
+		"action": "list_runs",
+		"count":  len(runs),
+		"runs":   runs,
+	}, nil
+}
+
+func (t Tool) ListEvents(runID string) (map[string]any, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, fmt.Errorf("runId 문자열이 필요합니다")
+	}
+	events, err := t.events.List(runID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":     true,
+		"action": "list_events",
+		"runId":  runID,
+		"count":  len(events),
+		"events": events,
+	}, nil
+}
+
 func (t Tool) OpenOutput(runID string) (map[string]any, error) {
 	record, err := t.store.Find(runID)
 	if err != nil {
@@ -277,15 +425,39 @@ func (t Tool) OpenOutput(runID string) (map[string]any, error) {
 }
 
 func (t Tool) Handle(action string, params map[string]any) (map[string]any, error) {
+	return t.HandleWithProgress(action, params, nil)
+}
+
+func (t Tool) HandleWithProgress(action string, params map[string]any, reporter ProgressReporter) (map[string]any, error) {
+	return t.HandleContext(context.Background(), action, params, reporter)
+}
+
+func (t Tool) HandleContext(ctx context.Context, action string, params map[string]any, reporter ProgressReporter) (map[string]any, error) {
 	switch action {
 	case "run":
-		return t.Run(requiredString(params, "request"), optionalObject(params, "options"))
+		return t.RunContext(ctx, requiredString(params, "request"), reporter, optionalObject(params, "options"))
 	case "analyze":
 		return t.Analyze(requiredString(params, "request"))
+	case "run_plan":
+		stages, err := requiredStages(params)
+		if err != nil {
+			return nil, err
+		}
+		return t.RunPlanContext(ctx, requiredString(params, "request"), stages, reporter, optionalObject(params, "options"))
+	case "validate_plan":
+		stages, err := requiredStages(params)
+		if err != nil {
+			return nil, err
+		}
+		return t.ValidatePlan(requiredString(params, "request"), stages)
 	case "orchestrate":
 		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
 	case "status", "get_status":
 		return t.GetStatus(requiredString(params, "runId"))
+	case "list_runs":
+		return t.ListRuns()
+	case "list_events":
+		return t.ListEvents(requiredString(params, "runId"))
 	case "list_agents":
 		return t.ListAgents()
 	case "open_output":
@@ -308,6 +480,34 @@ func requiredString(params map[string]any, key string) string {
 	}
 	value, _ := params[key].(string)
 	return value
+}
+
+func requiredStages(params map[string]any) ([]StageDef, error) {
+	if params == nil {
+		return nil, fmt.Errorf("stages 배열이 필요합니다")
+	}
+	raw, ok := params["stages"]
+	if !ok {
+		return nil, fmt.Errorf("stages 배열이 필요합니다")
+	}
+	if stages, ok := raw.([]StageDef); ok {
+		if len(stages) == 0 {
+			return nil, fmt.Errorf("stages 배열이 필요합니다")
+		}
+		return stages, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var stages []StageDef
+	if err := json.Unmarshal(data, &stages); err != nil {
+		return nil, err
+	}
+	if len(stages) == 0 {
+		return nil, fmt.Errorf("stages 배열이 필요합니다")
+	}
+	return stages, nil
 }
 
 func optionalObject(params map[string]any, key string) map[string]any {

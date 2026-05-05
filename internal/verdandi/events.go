@@ -19,6 +19,8 @@ const (
 	EventMetricsUpdated = "metrics-updated"
 )
 
+const maxEventLineBytes = 10 * 1024 * 1024
+
 type VisualizationEvent struct {
 	RunID     string                  `json:"runId"`
 	Type      string                  `json:"type"`
@@ -56,22 +58,36 @@ func (s EventStore) SaveRun(record RunRecord) error {
 }
 
 func (s EventStore) Save(runID string, events []VisualizationEvent) error {
+	path := s.path(runID)
+	lock := lockForPath(path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
-	file, err := os.Create(s.path(runID))
+	file, err := os.CreateTemp(s.dir, runID+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
 
 	encoder := json.NewEncoder(file)
 	for _, event := range events {
 		if err := encoder.Encode(event); err != nil {
+			_ = file.Close()
 			return err
 		}
 	}
-	return nil
+	if err := file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func (s EventStore) Reset(runID string) error {
@@ -79,10 +95,15 @@ func (s EventStore) Reset(runID string) error {
 }
 
 func (s EventStore) Append(event VisualizationEvent) error {
+	path := s.path(event.RunID)
+	lock := lockForPath(path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(s.path(event.RunID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
@@ -100,7 +121,12 @@ func (s EventStore) AppendMany(events []VisualizationEvent) error {
 }
 
 func (s EventStore) List(runID string) ([]VisualizationEvent, error) {
-	file, err := os.Open(s.path(runID))
+	path := s.path(runID)
+	lock := lockForPath(path)
+	lock.Lock()
+	defer lock.Unlock()
+
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +134,7 @@ func (s EventStore) List(runID string) ([]VisualizationEvent, error) {
 
 	events := []VisualizationEvent{}
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxEventLineBytes)
 	for scanner.Scan() {
 		var event VisualizationEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -131,6 +158,7 @@ func eventsForRun(record RunRecord) []VisualizationEvent {
 	for _, stage := range record.Stages {
 		events = append(events, stageStartedEvents(record.RunID, stage)...)
 		events = append(events, stageCompletedEvents(record.RunID, stage)...)
+		events = append(events, metricsUpdatedEvents(record.RunID, stage)...)
 	}
 
 	events = append(events, runCompletedEvent(record.RunID, record.Status, record.CompletedAt))
@@ -180,7 +208,7 @@ func stageStartedEvents(runID string, stage StageResult) []VisualizationEvent {
 
 func stageCompletedEvents(runID string, stage StageResult) []VisualizationEvent {
 	agent := visualizationAgentForStage(stage)
-	events := []VisualizationEvent{{
+	return []VisualizationEvent{{
 		RunID:     runID,
 		Type:      EventStageCompleted,
 		Timestamp: stage.Ended,
@@ -189,9 +217,13 @@ func stageCompletedEvents(runID string, stage StageResult) []VisualizationEvent 
 		Agent:     agent,
 		Message:   stage.Error,
 	}}
+}
+
+func metricsUpdatedEvents(runID string, stage StageResult) []VisualizationEvent {
+	agent := visualizationAgentForStage(stage)
 	if stage.Agent != nil {
 		metrics := stage.Agent.Metrics
-		events = append(events, VisualizationEvent{
+		return []VisualizationEvent{{
 			RunID:     runID,
 			Type:      EventMetricsUpdated,
 			Timestamp: stage.Ended,
@@ -200,9 +232,9 @@ func stageCompletedEvents(runID string, stage StageResult) []VisualizationEvent 
 			Agent:     agent,
 			Metrics:   &metrics,
 			Message:   "agent metrics updated",
-		})
+		}}
 	}
-	return events
+	return nil
 }
 
 func runCompletedEvent(runID string, status string, timestamp time.Time) VisualizationEvent {

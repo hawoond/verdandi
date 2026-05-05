@@ -3,6 +3,7 @@ package verdandi
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,126 @@ func TestToolRunAcceptsNaturalLanguageRequest(t *testing.T) {
 	}
 	if result["request"] != "계산기 앱을 기획하고 구현하고 테스트해줘" {
 		t.Fatalf("request was not echoed: %#v", result)
+	}
+}
+
+func TestToolRunRejectsEmptyRequest(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	_, err := tool.Run("   ")
+	if err == nil {
+		t.Fatal("expected empty request to be rejected")
+	}
+	if !strings.Contains(err.Error(), "request") {
+		t.Fatalf("expected request validation error, got %v", err)
+	}
+}
+
+func TestToolRunPlanExecutesClientSelectedStagesWithoutAnalyzer(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{err: errors.New("analyzer should not be called")})
+
+	result, err := tool.Handle("run_plan", map[string]any{
+		"request": "build and test from client plan",
+		"stages": []any{
+			map[string]any{"stage": "code-writer", "keyword": "client-llm"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run_plan failed: %v", err)
+	}
+
+	if result["action"] != "run_plan" {
+		t.Fatalf("expected run_plan action, got %#v", result["action"])
+	}
+	if result["analyzer"] != "client-plan" {
+		t.Fatalf("expected client-plan analyzer, got %#v", result["analyzer"])
+	}
+	summary := result["summary"].(Summary)
+	if summary.TotalStages != 2 || summary.Failed != 0 {
+		t.Fatalf("expected code-writer plus auto tester to succeed, got %#v", summary)
+	}
+}
+
+func TestToolRunPlanIncludesPlannerArtifacts(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Handle("run_plan", map[string]any{
+		"request": "plan then build a calculator",
+		"stages": []any{
+			map[string]any{"stage": "planner", "keyword": "client-llm"},
+			map[string]any{"stage": "code-writer", "keyword": "client-llm"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run_plan failed: %v", err)
+	}
+
+	summary := result["summary"].(Summary)
+	wantFiles := map[string]bool{
+		"requirements.md":        false,
+		"acceptance-criteria.md": false,
+		"task-breakdown.md":      false,
+		"risks.md":               false,
+	}
+	for _, file := range summary.Files {
+		if _, ok := wantFiles[file.Name]; ok {
+			wantFiles[file.Name] = true
+		}
+	}
+	for name, found := range wantFiles {
+		if !found {
+			t.Fatalf("expected planner artifact %s in %#v", name, summary.Files)
+		}
+	}
+}
+
+func TestToolValidatePlanNormalizesClientSelectedStages(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Handle("validate_plan", map[string]any{
+		"request": "document after building",
+		"stages": []any{
+			map[string]any{"stage": "documenter", "keyword": "client-llm"},
+			map[string]any{"stage": "code-writer", "keyword": "client-llm"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("validate_plan failed: %v", err)
+	}
+
+	if result["action"] != "validate_plan" {
+		t.Fatalf("expected validate_plan action, got %#v", result["action"])
+	}
+	plan := result["plan"].(Plan)
+	got := []string{}
+	for _, stage := range plan.Stages {
+		got = append(got, stage.Stage)
+	}
+	want := []string{"code-writer", "tester", "documenter"}
+	if !equalStrings(got, want) {
+		t.Fatalf("stages mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestToolValidatePlanRejectsUnknownClientStage(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	_, err := tool.Handle("validate_plan", map[string]any{
+		"request": "bad stage",
+		"stages": []any{
+			map[string]any{"stage": "shell", "keyword": "client-llm"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unknown stage to be rejected")
+	}
+	if !strings.Contains(err.Error(), "unknown stage") {
+		t.Fatalf("expected unknown stage error, got %v", err)
 	}
 }
 
@@ -196,6 +317,39 @@ func TestToolRunWritesSpinningWheelEvents(t *testing.T) {
 	if !agentNames["VisualPlannerCat"] {
 		t.Fatalf("expected agent event for VisualPlannerCat, got %#v", agentNames)
 	}
+}
+
+func TestToolRunWritesUpdatedMetricsEvent(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "metrics 이벤트 테스트", AgentContract{
+		Name: "MetricsAwareAgent",
+		Spec: AgentSpec{
+			Role:         "frontend accessibility engineer",
+			Capabilities: []string{"accessibility"},
+		},
+	}))
+
+	result, err := tool.Run("metrics 이벤트 테스트")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
+	if err != nil {
+		t.Fatalf("list events failed: %v", err)
+	}
+	for _, event := range events {
+		if event.Type == EventMetricsUpdated && event.Agent != nil && event.Agent.Name == "MetricsAwareAgent" {
+			if event.Metrics == nil {
+				t.Fatalf("expected metrics payload in event: %#v", event)
+			}
+			if event.Metrics.TotalRuns != 1 || event.Metrics.SuccessRuns != 1 || event.Metrics.SuccessRate != 1 {
+				t.Fatalf("expected updated metrics in event, got %#v", event.Metrics)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected metrics-updated event for MetricsAwareAgent in %#v", events)
 }
 
 func TestToolRunWritesFallbackSpinningWheelAgentsForKeywordStages(t *testing.T) {

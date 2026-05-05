@@ -1,6 +1,7 @@
 package verdandi
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -186,15 +187,27 @@ func normalizeAgentContract(request string, stage string, agent *AgentContract) 
 }
 
 func (o Orchestrator) Execute(request string, options map[string]any) (ExecutionResult, error) {
+	return o.ExecuteContext(context.Background(), request, options)
+}
+
+func (o Orchestrator) ExecuteContext(ctx context.Context, request string, options map[string]any) (ExecutionResult, error) {
 	plan := o.ParseRequest(request)
-	return o.ExecutePlan(plan, options)
+	return o.ExecutePlanContext(ctx, plan, options)
 }
 
 func (o Orchestrator) ExecutePlan(plan Plan, options map[string]any) (ExecutionResult, error) {
-	return o.ExecutePlanWithObserver(plan, options, nil)
+	return o.ExecutePlanContext(planContext(), plan, options)
+}
+
+func (o Orchestrator) ExecutePlanContext(ctx context.Context, plan Plan, options map[string]any) (ExecutionResult, error) {
+	return o.ExecutePlanWithObserverContext(ctx, plan, options, nil)
 }
 
 func (o Orchestrator) ExecutePlanWithObserver(plan Plan, options map[string]any, observer StageObserver) (ExecutionResult, error) {
+	return o.ExecutePlanWithObserverContext(planContext(), plan, options, observer)
+}
+
+func (o Orchestrator) ExecutePlanWithObserverContext(ctx context.Context, plan Plan, options map[string]any, observer StageObserver) (ExecutionResult, error) {
 	result := ExecutionResult{
 		Request: plan.OriginalRequest,
 		Plan:    plan,
@@ -203,6 +216,9 @@ func (o Orchestrator) ExecutePlanWithObserver(plan Plan, options map[string]any,
 
 	var previous *StageOutput
 	for _, stage := range plan.Stages {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		started := time.Now().UTC()
 		record := StageResult{
 			Stage:         stage.Stage,
@@ -213,7 +229,7 @@ func (o Orchestrator) ExecutePlanWithObserver(plan Plan, options map[string]any,
 		if observer != nil {
 			observer(StageLifecycleStarted, record)
 		}
-		stageOutput, err := o.executeStage(stage.Stage, plan.OriginalRequest, previous)
+		stageOutput, err := o.executeStageContext(ctx, stage.Stage, plan.OriginalRequest, previous)
 		record.Ended = time.Now().UTC()
 		if err != nil {
 			record.Status = "error"
@@ -246,12 +262,13 @@ func (o Orchestrator) ExecutePlanWithObserver(plan Plan, options map[string]any,
 }
 
 func (o Orchestrator) executeStage(stage string, request string, previous *StageOutput) (StageOutput, error) {
+	return o.executeStageContext(planContext(), stage, request, previous)
+}
+
+func (o Orchestrator) executeStageContext(ctx context.Context, stage string, request string, previous *StageOutput) (StageOutput, error) {
 	switch stage {
 	case "planner":
-		return o.writeFiles(previousOutputDir(previous), []generatedFile{{
-			Name:    "requirements.md",
-			Content: generatePlan(request),
-		}})
+		return o.writeFiles(previousOutputDir(previous), planningFiles(request))
 	case "code-writer":
 		return o.writeFiles(previousOutputDir(previous), generateCode(request))
 	case "tester":
@@ -259,7 +276,7 @@ func (o Orchestrator) executeStage(stage string, request string, previous *Stage
 		if outputDir == "" {
 			return StageOutput{}, fmt.Errorf("테스트할 코드가 없습니다")
 		}
-		return runValidation(outputDir)
+		return runValidationContext(ctx, outputDir)
 	case "documenter":
 		outputDir := previousOutputDir(previous)
 		files, err := listOutputFiles(outputDir)
@@ -279,6 +296,10 @@ func (o Orchestrator) executeStage(stage string, request string, previous *Stage
 	default:
 		return StageOutput{}, fmt.Errorf("unknown stage: %s", stage)
 	}
+}
+
+func planContext() context.Context {
+	return context.Background()
 }
 
 type generatedFile struct {
@@ -429,6 +450,10 @@ func TestRequestIsCaptured(t *testing.T) {
 }
 
 func runValidation(outputDir string) (StageOutput, error) {
+	return runValidationContext(planContext(), outputDir)
+}
+
+func runValidationContext(ctx context.Context, outputDir string) (StageOutput, error) {
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		return StageOutput{}, err
@@ -444,11 +469,18 @@ func runValidation(outputDir string) (StageOutput, error) {
 		return StageOutput{}, fmt.Errorf("검증할 Go 파일이 없습니다")
 	}
 
-	cmd := exec.Command("go", "test", "./...")
+	if err := ctx.Err(); err != nil {
+		return StageOutput{}, err
+	}
+
+	cmd := exec.CommandContext(ctx, "go", "test", "./...")
 	cmd.Dir = outputDir
 	output, err := cmd.CombinedOutput()
 	testOutput := strings.TrimSpace(string(output))
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return StageOutput{}, ctxErr
+		}
 		return StageOutput{}, fmt.Errorf("go test failed: %s", testOutput)
 	}
 
@@ -462,33 +494,6 @@ func runValidation(outputDir string) (StageOutput, error) {
 			Output: testOutput,
 		}},
 	}, nil
-}
-
-func generatePlan(request string) string {
-	return fmt.Sprintf(`# Requirements
-
-## Goal
-Create a local generated project for this request:
-
-%s
-
-## Scope
-- Parse the request into an ordered Verdandi workflow.
-- Generate project files in a local output directory.
-- Validate the generated Go project before reporting success.
-
-## Workflow
-1. Analyze the request.
-2. Select the required stages.
-3. Execute each stage with prior output as context.
-4. Validate the generated result.
-5. Record the run for later status and output lookup.
-
-## Acceptance Criteria
-- The generated project contains a Go module.
-- The generated project passes `+"`go test ./...`"+`.
-- The run summary lists generated files and stage outcomes.
-`, request)
 }
 
 func generateDocumentation(request string, files []FileEntry) string {

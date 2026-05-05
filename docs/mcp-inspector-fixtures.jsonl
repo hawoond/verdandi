@@ -1,0 +1,17 @@
+{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcp-inspector","version":"fixture"}}}
+{"jsonrpc":"2.0","id":"ping","method":"ping","params":{}}
+{"jsonrpc":"2.0","id":"tools","method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":"resources","method":"resources/list","params":{}}
+{"jsonrpc":"2.0","id":"resources-page","method":"resources/list","params":{"cursor":"0"}}
+{"jsonrpc":"2.0","id":"templates","method":"resources/templates/list","params":{}}
+{"jsonrpc":"2.0","id":"runs-resource","method":"resources/read","params":{"uri":"verdandi://runs"}}
+{"jsonrpc":"2.0","id":"agents-resource","method":"resources/read","params":{"uri":"verdandi://agents"}}
+{"jsonrpc":"2.0","id":"prompts","method":"prompts/list","params":{}}
+{"jsonrpc":"2.0","id":"prompts-page","method":"prompts/list","params":{"cursor":"0"}}
+{"jsonrpc":"2.0","id":"validate-prompt","method":"prompts/get","params":{"name":"validate-plan","arguments":{"request":"Build a calculator app and verify it."}}}
+{"jsonrpc":"2.0","id":"complete-request","method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"validate-plan"},"argument":{"name":"request","value":""}}}
+{"jsonrpc":"2.0","id":"complete-run","method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"verdandi://runs/{runId}"},"argument":{"name":"runId","value":"run_"}}}
+{"jsonrpc":"2.0","id":"validate-tool","method":"tools/call","params":{"name":"validate_plan","arguments":{"request":"Build a calculator app and verify it.","stages":[{"stage":"planner","keyword":"fixture"},{"stage":"code-writer","keyword":"fixture"},{"stage":"tester","keyword":"fixture"}]}}}
+{"jsonrpc":"2.0","id":"progress-run","method":"tools/call","params":{"_meta":{"progressToken":"fixture-progress"},"name":"run_plan","arguments":{"request":"Build a calculator app and verify it.","stages":[{"stage":"code-writer","keyword":"fixture"}]}}}
+{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"unknown-fixture-request","reason":"fixture cancellation"}}
+[{"jsonrpc":"2.0","id":"batch-tools","method":"tools/list","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":"batch-prompts","method":"prompts/list","params":{}}]

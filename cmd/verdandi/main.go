@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/genie-cvc/verdandi/internal/verdandi"
+	"github.com/genie-cvc/verdandi/internal/version"
 )
 
 func main() {
@@ -19,7 +20,12 @@ func main() {
 	analyzer := flag.String("analyzer", "", "request analyzer backend: keyword, llm, or auto")
 	llmEndpoint := flag.String("llm-endpoint", "", "LLM analyzer endpoint")
 	llmModel := flag.String("llm-model", "", "LLM analyzer model")
+	showVersion := flag.Bool("version", false, "print version metadata")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 
 	tool := verdandi.NewTool(verdandi.Options{
 		DataDir:  *dataDir,

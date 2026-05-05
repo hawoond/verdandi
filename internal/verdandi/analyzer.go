@@ -6,6 +6,7 @@ const (
 	AnalyzerKeyword = "keyword"
 	AnalyzerLLM     = "llm"
 	AnalyzerAuto    = "auto"
+	AnalyzerClient  = "client-plan"
 )
 
 type Analyzer interface {

@@ -7,12 +7,18 @@ import (
 	"os"
 
 	"github.com/genie-cvc/verdandi/internal/spinningwheel"
+	"github.com/genie-cvc/verdandi/internal/version"
 )
 
 func main() {
 	dataDir := flag.String("data-dir", "", "Verdandi runtime data directory")
 	addr := flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
+	showVersion := flag.Bool("version", false, "print version metadata")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 
 	config := spinningwheel.DefaultConfig().
 		WithDataDir(*dataDir).
