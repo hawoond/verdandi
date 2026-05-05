@@ -4,11 +4,15 @@
 
 .verdandi/
 bin/
+dist/
 /verdandi
 /verdandi-mcp
+/verdandi-spinning-wheel
 
 *.log
 
 *.md
 !README.md
 !README.*.md
+!docs/INSTALL.md
+!docs/mcp-standard-compatibility.md

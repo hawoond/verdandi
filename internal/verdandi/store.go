@@ -19,7 +19,15 @@ func NewStore(path string) Store {
 	return Store{path: path}
 }
 
+func NewStoreForDataDir(dataDir string) Store {
+	return NewStore(filepath.Join(dataDir, "runs.json"))
+}
+
 func (s Store) Save(record RunRecord) error {
+	lock := lockForPath(s.path)
+	lock.Lock()
+	defer lock.Unlock()
+
 	store, err := s.load()
 	if err != nil {
 		return err
@@ -29,6 +37,16 @@ func (s Store) Save(record RunRecord) error {
 		store.Runs = store.Runs[len(store.Runs)-100:]
 	}
 	return s.write(store)
+}
+
+func (s Store) List() ([]RunRecord, error) {
+	store, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]RunRecord, len(store.Runs))
+	copy(runs, store.Runs)
+	return runs, nil
 }
 
 func (s Store) Find(runID string) (RunRecord, error) {
@@ -77,5 +95,5 @@ func (s Store) write(store runStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	return writeFileAtomic(s.path, data, 0o644)
 }

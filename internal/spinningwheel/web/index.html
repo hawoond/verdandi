@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spinning Wheel</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Verdandi visualizer</p>
+          <h1>Spinning Wheel</h1>
+        </div>
+        <select id="runSelect" aria-label="Run"></select>
+        <div class="controls">
+          <button id="replayButton" type="button">Replay</button>
+          <button id="playPauseButton" type="button">Pause</button>
+          <button id="stepButton" type="button">Step</button>
+        </div>
+        <label class="speed-control" for="speedRange">
+          <span>Speed</span>
+          <input id="speedRange" type="range" min="350" max="1800" step="50" value="1100" />
+        </label>
+        <label class="filter-control" for="stageFilter">
+          <span>Stage</span>
+          <select id="stageFilter" aria-label="Stage filter">
+            <option value="">All stages</option>
+            <option value="planner">planner</option>
+            <option value="code-writer">code-writer</option>
+            <option value="tester">tester</option>
+            <option value="documenter">documenter</option>
+            <option value="deployer">deployer</option>
+          </select>
+        </label>
+        <div class="controls">
+          <button id="focusModeButton" type="button">Focus</button>
+          <button id="clearFocusButton" type="button">Clear</button>
+        </div>
+        <p id="eventCounter" class="event-counter">0 / 0 events</p>
+        <p id="liveStatus" class="live-status is-offline">Live: disconnected</p>
+        <section class="agent-roster" aria-label="Active agents">
+          <h2>Agents</h2>
+          <ul id="agentRoster"></ul>
+        </section>
+        <section class="conversation" aria-label="Agent conversation">
+          <h2>Conversation</h2>
+          <ol id="conversationLog"></ol>
+        </section>
+        <section class="inspector" id="inspector">
+          <h2>Agent</h2>
+          <p>Select a run to watch the workspace come alive.</p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <canvas id="map" width="1100" height="720" aria-label="Spinning Wheel workspace"></canvas>
+        <ol id="timeline" class="timeline" aria-label="Event timeline"></ol>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

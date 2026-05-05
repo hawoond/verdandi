@@ -1,0 +1,399 @@
+{
+  "completionReferences": [
+    {
+      "argument": "request",
+      "ref": {
+        "name": "plan-and-run",
+        "type": "ref/prompt"
+      }
+    },
+    {
+      "argument": "request",
+      "ref": {
+        "name": "validate-plan",
+        "type": "ref/prompt"
+      }
+    },
+    {
+      "argument": "request",
+      "ref": {
+        "name": "choose-agent-lifecycle",
+        "type": "ref/prompt"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "name": "inspect-run",
+        "type": "ref/prompt"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "name": "inspect-failed-run",
+        "type": "ref/prompt"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://runs/{runId}"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://runs/{runId}/events"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://runs/{runId}/output"
+      }
+    }
+  ],
+  "initialize": {
+    "capabilities": {
+      "completions": {},
+      "prompts": {
+        "listChanged": false
+      },
+      "resources": {
+        "listChanged": false,
+        "subscribe": false
+      },
+      "tools": {
+        "listChanged": false
+      }
+    },
+    "instructions": "For ordinary user requests, call run with the user's natural-language request. Use analyze only when the user explicitly asks to inspect the plan before execution. Use validate_plan and run_plan when the MCP client chooses workflow stages.",
+    "protocolVersion": "2025-11-25",
+    "serverInfo": {
+      "description": "Pure Go MCP server for Verdandi orchestration.",
+      "name": "verdandi-mcp",
+      "title": "Verdandi MCP Server",
+      "version": "0.1.0"
+    }
+  },
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "The user's natural-language task request.",
+          "name": "request",
+          "required": true
+        }
+      ],
+      "description": "Choose Verdandi stages, validate the plan, then run it.",
+      "name": "plan-and-run",
+      "title": "Plan and Run"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The user's natural-language task request.",
+          "name": "request",
+          "required": true
+        }
+      ],
+      "description": "Create a client-selected Verdandi plan and validate it before execution.",
+      "name": "validate-plan",
+      "title": "Validate Plan"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Verdandi runId to inspect.",
+          "name": "runId",
+          "required": true
+        }
+      ],
+      "description": "Inspect a previous Verdandi run through resources and status tools.",
+      "name": "inspect-run",
+      "title": "Inspect Run"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The failed Verdandi runId to inspect.",
+          "name": "runId",
+          "required": true
+        }
+      ],
+      "description": "Analyze a failed Verdandi run and identify the failed stage and output.",
+      "name": "inspect-failed-run",
+      "title": "Inspect Failed Run"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The next task request that needs an agent lifecycle decision.",
+          "name": "request",
+          "required": true
+        }
+      ],
+      "description": "Use agent metrics to choose reuse-enhance, rewrite, or separate for a future run.",
+      "name": "choose-agent-lifecycle",
+      "title": "Choose Agent Lifecycle"
+    }
+  ],
+  "protocolVersion": "2025-11-25",
+  "resourceTemplates": [
+    {
+      "description": "Read a single Verdandi run record by runId.",
+      "mimeType": "application/json",
+      "name": "run",
+      "title": "Verdandi Run",
+      "uriTemplate": "verdandi://runs/{runId}"
+    },
+    {
+      "description": "Read visualization events for a Verdandi run.",
+      "mimeType": "application/json",
+      "name": "run-events",
+      "title": "Verdandi Run Events",
+      "uriTemplate": "verdandi://runs/{runId}/events"
+    },
+    {
+      "description": "Read generated output file metadata for a Verdandi run.",
+      "mimeType": "application/json",
+      "name": "run-output",
+      "title": "Verdandi Run Output",
+      "uriTemplate": "verdandi://runs/{runId}/output"
+    }
+  ],
+  "resources": [
+    {
+      "description": "List persisted Verdandi workflow runs.",
+      "mimeType": "application/json",
+      "name": "runs",
+      "title": "Verdandi Runs",
+      "uri": "verdandi://runs"
+    },
+    {
+      "description": "List persisted agent contracts and lifecycle recommendations.",
+      "mimeType": "application/json",
+      "name": "agents",
+      "title": "Verdandi Agents",
+      "uri": "verdandi://agents"
+    }
+  ],
+  "tools": [
+    {
+      "description": "Default tool for natural-language task requests. It analyzes the request, creates the needed agent workflow, executes it, and returns the run summary.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "type": "object"
+          },
+          "request": {
+            "description": "The user's natural-language task request.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "run",
+      "title": "Run Verdandi"
+    },
+    {
+      "description": "Analyze a natural-language request and return the selected agent contract without executing the workflow.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "analyze",
+      "title": "Analyze request"
+    },
+    {
+      "description": "Run an ordered Verdandi stage plan selected by the MCP client after Verdandi validates and normalizes it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "type": "object"
+          },
+          "request": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "keyword": {
+                  "type": "string"
+                },
+                "stage": {
+                  "enum": [
+                    "planner",
+                    "code-writer",
+                    "tester",
+                    "documenter",
+                    "deployer"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "stage",
+                "keyword"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "request",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "name": "run_plan",
+      "title": "Run client-selected plan"
+    },
+    {
+      "description": "Validate and normalize an ordered Verdandi stage plan without executing it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "keyword": {
+                  "type": "string"
+                },
+                "stage": {
+                  "enum": [
+                    "planner",
+                    "code-writer",
+                    "tester",
+                    "documenter",
+                    "deployer"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "stage",
+                "keyword"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "request",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "name": "validate_plan",
+      "title": "Validate client-selected plan"
+    },
+    {
+      "description": "Compatibility alias for run.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "type": "object"
+          },
+          "request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "orchestrate",
+      "title": "Run Verdandi orchestration"
+    },
+    {
+      "description": "Look up a previous Verdandi run by runId.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
+      "name": "get_status",
+      "title": "Get run status"
+    },
+    {
+      "description": "List generated output files for a previous Verdandi run.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
+      "name": "open_output",
+      "title": "Open run output"
+    },
+    {
+      "description": "List persisted dynamic agent contracts and lifecycle policy options.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "list_agents",
+      "title": "List Verdandi agents"
+    }
+  ],
+  "transports": {
+    "stdio": {
+      "batch": true,
+      "cancellation": true,
+      "progress": true
+    },
+    "streamableHTTP": {
+      "endpoint": "/mcp",
+      "optionalBearerToken": true,
+      "optionalSession": true,
+      "originValidation": true,
+      "post": true,
+      "sseProgress": true,
+      "standaloneGET": false
+    }
+  }
+}

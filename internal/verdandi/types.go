@@ -36,12 +36,14 @@ type KeywordFrequency struct {
 }
 
 type AgentContract struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Command     string            `json:"command"`
-	Spec        AgentSpec         `json:"spec"`
-	Metadata    map[string]any    `json:"metadata"`
-	Inputs      map[string]string `json:"inputs"`
+	Name                    string                       `json:"name"`
+	Description             string                       `json:"description"`
+	Command                 string                       `json:"command"`
+	Spec                    AgentSpec                    `json:"spec"`
+	Metadata                map[string]any               `json:"metadata"`
+	Inputs                  map[string]string            `json:"inputs"`
+	Metrics                 AgentMetrics                 `json:"metrics,omitempty"`
+	LifecycleRecommendation AgentLifecycleRecommendation `json:"lifecycleRecommendation,omitempty"`
 }
 
 type AgentSpec struct {
@@ -49,10 +51,28 @@ type AgentSpec struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+type AgentMetrics struct {
+	TotalRuns   int       `json:"totalRuns"`
+	SuccessRuns int       `json:"successRuns"`
+	FailureRuns int       `json:"failureRuns"`
+	SuccessRate float64   `json:"successRate"`
+	LastStatus  string    `json:"lastStatus,omitempty"`
+	LastError   string    `json:"lastError,omitempty"`
+	LastRunAt   time.Time `json:"lastRunAt,omitempty"`
+}
+
+type AgentLifecycleRecommendation struct {
+	Action string  `json:"action,omitempty"`
+	Reason string  `json:"reason,omitempty"`
+	Score  float64 `json:"score,omitempty"`
+}
+
 type StageDef struct {
-	Stage   string `json:"stage"`
-	Keyword string `json:"keyword"`
-	Order   int    `json:"order"`
+	Stage         string                  `json:"stage"`
+	Keyword       string                  `json:"keyword"`
+	Order         int                     `json:"order"`
+	Agent         *AgentContract          `json:"agent,omitempty"`
+	AgentDecision *AgentLifecycleDecision `json:"agentDecision,omitempty"`
 }
 
 type Edge struct {
@@ -73,12 +93,37 @@ type Plan struct {
 }
 
 type StageResult struct {
-	Stage   string       `json:"stage"`
-	Status  string       `json:"status"`
-	Result  *StageOutput `json:"result,omitempty"`
-	Error   string       `json:"error,omitempty"`
-	Started time.Time    `json:"started_at"`
-	Ended   time.Time    `json:"ended_at"`
+	Stage         string                  `json:"stage"`
+	Status        string                  `json:"status"`
+	Agent         *AgentContract          `json:"agent,omitempty"`
+	AgentDecision *AgentLifecycleDecision `json:"agentDecision,omitempty"`
+	Result        *StageOutput            `json:"result,omitempty"`
+	Error         string                  `json:"error,omitempty"`
+	Started       time.Time               `json:"started_at"`
+	Ended         time.Time               `json:"ended_at"`
+}
+
+const (
+	AgentPolicyReuseEnhance = "reuse-enhance"
+	AgentPolicyRewrite      = "rewrite"
+	AgentPolicySeparate     = "separate"
+)
+
+const (
+	AgentDecisionSourceRunOption              = "run-option"
+	AgentDecisionSourceStageDecision          = "stage-decision"
+	AgentDecisionSourceAgentMetadata          = "agent-metadata"
+	AgentDecisionSourceRegistryRecommendation = "registry-recommendation"
+	AgentDecisionSourceDefault                = "default"
+)
+
+type AgentLifecycleDecision struct {
+	Action            string   `json:"action"`
+	Source            string   `json:"source,omitempty"`
+	ExistingAgentName string   `json:"existingAgentName,omitempty"`
+	Reason            string   `json:"reason"`
+	Similarity        float64  `json:"similarity,omitempty"`
+	Options           []string `json:"options"`
 }
 
 type StageOutput struct {
@@ -105,13 +150,14 @@ type Summary struct {
 }
 
 type ExecutionResult struct {
-	Request     string        `json:"request"`
-	Plan        Plan          `json:"plan"`
-	Analyzer    string        `json:"analyzer,omitempty"`
-	Stages      []StageResult `json:"stages"`
-	OutputDir   string        `json:"outputDir,omitempty"`
-	Summary     Summary       `json:"summary"`
-	CompletedAt time.Time     `json:"completed_at"`
+	Request        string        `json:"request"`
+	Plan           Plan          `json:"plan"`
+	Analyzer       string        `json:"analyzer,omitempty"`
+	FallbackReason string        `json:"fallbackReason,omitempty"`
+	Stages         []StageResult `json:"stages"`
+	OutputDir      string        `json:"outputDir,omitempty"`
+	Summary        Summary       `json:"summary"`
+	CompletedAt    time.Time     `json:"completed_at"`
 }
 
 type FileEntry struct {
@@ -129,13 +175,14 @@ type FileInfo struct {
 }
 
 type RunRecord struct {
-	RunID       string        `json:"runId"`
-	Status      string        `json:"status"`
-	Request     string        `json:"request"`
-	Analyzer    string        `json:"analyzer,omitempty"`
-	OutputDir   string        `json:"outputDir,omitempty"`
-	Summary     Summary       `json:"summary"`
-	Stages      []StageResult `json:"stages"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CompletedAt time.Time     `json:"completed_at"`
+	RunID          string        `json:"runId"`
+	Status         string        `json:"status"`
+	Request        string        `json:"request"`
+	Analyzer       string        `json:"analyzer,omitempty"`
+	FallbackReason string        `json:"fallbackReason,omitempty"`
+	OutputDir      string        `json:"outputDir,omitempty"`
+	Summary        Summary       `json:"summary"`
+	Stages         []StageResult `json:"stages"`
+	CreatedAt      time.Time     `json:"created_at"`
+	CompletedAt    time.Time     `json:"completed_at"`
 }
