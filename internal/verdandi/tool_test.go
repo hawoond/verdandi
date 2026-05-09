@@ -408,6 +408,153 @@ func TestPrepareWorkflowCreatesPersistentReusableAssets(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkflowUsesAnalyzerProvidedAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "React 대시보드 구현"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "react"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Text:   request,
+		Intent: IntentResult{Category: IntentOrchestrator, Confidence: 0.9},
+		Plan:   plan,
+		Source: AnalyzerLLM,
+		WorkflowAssets: WorkflowAssets{
+			Agents: []AgentAsset{{
+				Name: "ReactDashboardImplementer",
+				Role: "code-writer",
+				Contract: AgentContract{
+					Name: "ReactDashboardImplementer",
+					Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react", "dashboard", "typescript"}},
+				},
+			}},
+			Skills: []SkillAsset{{
+				Name: "react-dashboard-builder",
+				Contract: SkillContract{
+					Name:         "react-dashboard-builder",
+					Description:  "Build production React dashboards.",
+					WhenToUse:    "React dashboard implementation tasks.",
+					Instructions: "Use existing app patterns and verify responsive layout.",
+					Inputs:       []string{"request"},
+					Outputs:      []string{"patch"},
+					Constraints:  []string{"External coding agent writes code."},
+				},
+			}},
+		},
+	}})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow returned error: %v", err)
+	}
+	workflow := result["workflow"].(WorkflowPackage)
+	if workflow.Agents[0].Name != "ReactDashboardImplementer" {
+		t.Fatalf("agent = %q, want ReactDashboardImplementer", workflow.Agents[0].Name)
+	}
+	if workflow.Skills[0].Name != "react-dashboard-builder" {
+		t.Fatalf("skill = %q, want react-dashboard-builder", workflow.Skills[0].Name)
+	}
+	assertWorkflowTasksReferenceAssets(t, workflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if !containsAgentAssetID(agents, workflow.Agents[0].ID) {
+		t.Fatalf("registry missing analyzer agent %q in %#v", workflow.Agents[0].ID, agents)
+	}
+	if !containsSkillAssetID(skills, workflow.Skills[0].ID) {
+		t.Fatalf("registry missing analyzer skill %q in %#v", workflow.Skills[0].ID, skills)
+	}
+}
+
+func TestPrepareWorkflowMergesAnalyzerSkillsIntoReusedAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "React 대시보드 구현"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "react"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	existing := normalizeAgentAsset(AgentAsset{
+		Name:   "ReactDashboardImplementer",
+		Role:   "code-writer",
+		Status: AssetStatusActive,
+		Contract: AgentContract{
+			Name: "ReactDashboardImplementer",
+			Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react"}},
+		},
+	}, "")
+	if err := NewAssetRegistry(dataDir).UpsertAgent(existing); err != nil {
+		t.Fatalf("seed existing agent: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Text:   request,
+		Intent: IntentResult{Category: IntentOrchestrator, Confidence: 0.9},
+		Plan:   plan,
+		Source: AnalyzerLLM,
+		WorkflowAssets: WorkflowAssets{
+			Agents: []AgentAsset{{
+				Name: "ReactDashboardImplementer",
+				Role: "code-writer",
+				Contract: AgentContract{
+					Name: "ReactDashboardImplementer",
+					Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react", "dashboard"}},
+				},
+			}},
+			Skills: []SkillAsset{{
+				Name: "react-dashboard-builder",
+				Contract: SkillContract{
+					Name:         "react-dashboard-builder",
+					Description:  "Build production React dashboards.",
+					WhenToUse:    "React dashboard implementation tasks.",
+					Instructions: "Use existing app patterns and verify responsive layout.",
+				},
+			}},
+		},
+	}})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow returned error: %v", err)
+	}
+	workflow := result["workflow"].(WorkflowPackage)
+	if workflow.Agents[0].ID != existing.ID {
+		t.Fatalf("expected existing agent %q to be reused, got %#v", existing.ID, workflow.Agents[0])
+	}
+	skillID := workflow.Skills[0].ID
+	if !containsString(workflow.Agents[0].Skills, skillID) {
+		t.Fatalf("reused workflow agent missing analyzer skill %q: %#v", skillID, workflow.Agents[0])
+	}
+
+	agents, err := NewAssetRegistry(dataDir).ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	var persisted AgentAsset
+	for _, agent := range agents {
+		if agent.ID == existing.ID {
+			persisted = agent
+			break
+		}
+	}
+	if persisted.ID == "" {
+		t.Fatalf("registry missing reused agent %q in %#v", existing.ID, agents)
+	}
+	if !containsString(persisted.Skills, skillID) {
+		t.Fatalf("persisted reused agent missing analyzer skill %q: %#v", skillID, persisted)
+	}
+}
+
 func TestPrepareWorkflowReusesExistingAssetsWithoutActiveVersionChurn(t *testing.T) {
 	dataDir := t.TempDir()
 	request := "접근성 좋은 계산기 앱을 기획하고 구현하고 테스트해줘"
@@ -1618,6 +1765,15 @@ func runAnalyzerPlanLegacyForTest(t *testing.T, tool Tool, request string, optio
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSkillAssetID(skills []SkillAsset, id string) bool {
+	for _, skill := range skills {
+		if skill.ID == id {
 			return true
 		}
 	}

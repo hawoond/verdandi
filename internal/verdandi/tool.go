@@ -189,7 +189,7 @@ func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[st
 
 	runID := createRunID()
 	createdAt := time.Now().UTC()
-	pkg := BuildWorkflowPackageFromPlan(runID, request, analysis.Plan)
+	pkg := BuildWorkflowPackageFromPlan(runID, request, analysis.Plan, analysis.WorkflowAssets)
 	existingAgents, err := t.assets.ListAgents()
 	if err != nil {
 		return nil, err
@@ -200,8 +200,14 @@ func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[st
 		if err != nil {
 			return nil, err
 		}
+		selected.Skills = mergeStrings(selected.Skills, agent.Skills)
+		if err := t.assets.UpsertAgent(selected); err != nil {
+			return nil, err
+		}
 		if !containsAgentAssetID(existingAgents, selected.ID) {
 			existingAgents = append(existingAgents, selected)
+		} else {
+			existingAgents = replaceAgentAsset(existingAgents, selected)
 		}
 		pkg.Agents[index] = selected
 		replaceWorkflowAgentID(&pkg, originalID, selected.ID)
@@ -772,6 +778,17 @@ func containsAgentAssetID(agents []AgentAsset, id string) bool {
 		}
 	}
 	return false
+}
+
+func replaceAgentAsset(agents []AgentAsset, replacement AgentAsset) []AgentAsset {
+	updated := append([]AgentAsset{}, agents...)
+	for index, agent := range updated {
+		if agent.ID == replacement.ID {
+			updated[index] = replacement
+			return updated
+		}
+	}
+	return append(updated, replacement)
 }
 
 func uniqueSeparateAssetName(base string, existing []AgentAsset) string {

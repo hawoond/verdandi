@@ -6,12 +6,15 @@ import (
 	"time"
 )
 
-func BuildWorkflowPackageFromPlan(runID string, request string, plan Plan) WorkflowPackage {
+func BuildWorkflowPackageFromPlan(runID string, request string, plan Plan, assets WorkflowAssets) WorkflowPackage {
 	if strings.TrimSpace(request) == "" {
 		request = plan.OriginalRequest
 	}
 	if strings.TrimSpace(runID) == "" {
 		runID = createRunID()
+	}
+	if len(assets.Agents) > 0 || len(assets.Skills) > 0 {
+		return buildWorkflowPackageFromAssets(runID, request, plan, assets)
 	}
 
 	agents := make([]AgentAsset, 0, len(plan.Stages))
@@ -45,6 +48,172 @@ func BuildWorkflowPackageFromPlan(runID string, request string, plan Plan) Workf
 		AcceptanceCriteria: acceptanceCriteriaForPlan(plan),
 		CreatedAt:          time.Now().UTC(),
 	}
+}
+
+func buildWorkflowPackageFromAssets(runID string, request string, plan Plan, assets WorkflowAssets) WorkflowPackage {
+	agents := make([]AgentAsset, 0, len(assets.Agents)+len(plan.Stages))
+	skills := make([]SkillAsset, 0, len(assets.Skills)+len(plan.Stages))
+	tasks := make([]WorkflowTask, 0, len(plan.Stages))
+	agentIndexByID := map[string]int{}
+	skillIndexByID := map[string]int{}
+
+	addAgent := func(agent AgentAsset) AgentAsset {
+		agent = normalizeWorkflowAgentAsset(agent)
+		if existingIndex, ok := agentIndexByID[agent.ID]; ok {
+			return agents[existingIndex]
+		}
+		agentIndexByID[agent.ID] = len(agents)
+		agents = append(agents, agent)
+		return agent
+	}
+	addSkill := func(skill SkillAsset) SkillAsset {
+		skill = normalizeWorkflowSkillAsset(skill)
+		if existingIndex, ok := skillIndexByID[skill.ID]; ok {
+			return skills[existingIndex]
+		}
+		skillIndexByID[skill.ID] = len(skills)
+		skills = append(skills, skill)
+		return skill
+	}
+
+	providedAgents := make([]AgentAsset, 0, len(assets.Agents))
+	for _, agent := range assets.Agents {
+		agent = addAgent(agent)
+		providedAgents = append(providedAgents, agent)
+	}
+	providedSkills := make([]SkillAsset, 0, len(assets.Skills))
+	for _, skill := range assets.Skills {
+		skill = addSkill(skill)
+		providedSkills = append(providedSkills, skill)
+	}
+
+	for index, stage := range plan.Stages {
+		agent, found := selectWorkflowAgentForStage(providedAgents, stage)
+		if !found {
+			agent = addAgent(assetAgentForStage(stage))
+		}
+		agent = addAgent(agent)
+
+		taskSkillIDs := []string{}
+		if stage.Stage == "code-writer" && len(providedSkills) > 0 {
+			for _, skill := range providedSkills {
+				taskSkillIDs = append(taskSkillIDs, skill.ID)
+			}
+		}
+		if len(taskSkillIDs) == 0 {
+			skill := addSkill(assetSkillForStage(stage))
+			taskSkillIDs = append(taskSkillIDs, skill.ID)
+		}
+
+		agentIndex := agentIndexByID[agent.ID]
+		agents[agentIndex].Skills = mergeStrings(agents[agentIndex].Skills, taskSkillIDs)
+		for _, skillID := range taskSkillIDs {
+			skillIndex := skillIndexByID[skillID]
+			skills[skillIndex].UsedByAgents = mergeStrings(skills[skillIndex].UsedByAgents, []string{agent.ID})
+		}
+
+		tasks = append(tasks, WorkflowTask{
+			ID:          stageTaskID(index, stage),
+			Title:       stageTitle(stage),
+			Description: stageDescription(stage),
+			AgentID:     agent.ID,
+			SkillIDs:    taskSkillIDs,
+			DependsOn:   dependenciesForStage(plan, index),
+		})
+	}
+
+	return WorkflowPackage{
+		RunID:              runID,
+		Request:            request,
+		Agents:             agents,
+		Skills:             skills,
+		Tasks:              tasks,
+		AcceptanceCriteria: acceptanceCriteriaForPlan(plan),
+		CreatedAt:          time.Now().UTC(),
+	}
+}
+
+func normalizeWorkflowAgentAsset(agent AgentAsset) AgentAsset {
+	if agent.Name == "" {
+		agent.Name = agent.Contract.Name
+	}
+	if agent.Role == "" {
+		agent.Role = agent.Contract.Spec.Role
+	}
+	if agent.Role == "" {
+		agent.Role = "code-writer"
+	}
+	if agent.Contract.Name == "" {
+		agent.Contract.Name = agent.Name
+	}
+	if agent.Contract.Description == "" {
+		agent.Contract.Description = "Reusable Verdandi agent asset for " + agent.Role + " workflow stages."
+	}
+	if agent.Contract.Command == "" {
+		agent.Contract.Command = "codex"
+	}
+	if agent.Contract.Spec.Role == "" {
+		agent.Contract.Spec.Role = agent.Role
+	}
+	if len(agent.Contract.Spec.Capabilities) == 0 {
+		agent.Contract.Spec.Capabilities = capabilitiesFor(agent.Role)
+	}
+	if agent.Contract.Metadata == nil {
+		agent.Contract.Metadata = map[string]any{}
+	}
+	if agent.Contract.Inputs == nil {
+		agent.Contract.Inputs = map[string]string{}
+	}
+	return normalizeAgentAsset(agent, "")
+}
+
+func normalizeWorkflowSkillAsset(skill SkillAsset) SkillAsset {
+	if skill.Name == "" {
+		skill.Name = skill.Contract.Name
+	}
+	if skill.Contract.Name == "" {
+		skill.Contract.Name = skill.Name
+	}
+	if skill.Contract.Description == "" {
+		skill.Contract.Description = "Reusable Verdandi skill asset for workflow tasks."
+	}
+	if skill.Contract.WhenToUse == "" {
+		skill.Contract.WhenToUse = "Use when the prepared workflow task needs this reusable skill."
+	}
+	if skill.Contract.Instructions == "" {
+		skill.Contract.Instructions = "Use repository context and the workflow handoff to complete the assigned task."
+	}
+	if len(skill.Contract.Inputs) == 0 {
+		skill.Contract.Inputs = []string{"request", "workflow task", "selected assets"}
+	}
+	if len(skill.Contract.Outputs) == 0 {
+		skill.Contract.Outputs = []string{"work summary", "changed files", "verification results"}
+	}
+	if len(skill.Contract.Constraints) == 0 {
+		skill.Contract.Constraints = []string{"External coding agent writes code, not Verdandi."}
+	}
+	return normalizeSkillAsset(skill, "")
+}
+
+func selectWorkflowAgentForStage(agents []AgentAsset, stage StageDef) (AgentAsset, bool) {
+	for _, agent := range agents {
+		if workflowAgentMatchesStage(agent, stage.Stage) {
+			return agent, true
+		}
+	}
+	if stage.Stage == "code-writer" && len(agents) > 0 {
+		return agents[0], true
+	}
+	return AgentAsset{}, false
+}
+
+func workflowAgentMatchesStage(agent AgentAsset, stage string) bool {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(agent.Role), stage) ||
+		strings.EqualFold(strings.TrimSpace(agent.Contract.Spec.Role), stage)
 }
 
 func assetAgentForStage(stage StageDef) AgentAsset {
