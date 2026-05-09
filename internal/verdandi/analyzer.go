@@ -21,6 +21,12 @@ type AnalysisResult struct {
 	Plan           Plan               `json:"plan"`
 	Source         string             `json:"source"`
 	FallbackReason string             `json:"fallbackReason,omitempty"`
+	WorkflowAssets WorkflowAssets     `json:"workflowAssets,omitempty"`
+}
+
+type WorkflowAssets struct {
+	Agents []AgentAsset `json:"agents,omitempty"`
+	Skills []SkillAsset `json:"skills,omitempty"`
 }
 
 type AnalyzerConfig struct {

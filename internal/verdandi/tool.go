@@ -21,7 +21,9 @@ type Tool struct {
 	orchestrator Orchestrator
 	store        Store
 	agents       AgentRegistry
+	assets       AssetRegistry
 	events       EventStore
+	dataDir      string
 }
 
 type ProgressEvent struct {
@@ -52,7 +54,9 @@ func NewTool(options Options) Tool {
 		orchestrator: orchestrator,
 		store:        NewStoreForDataDir(dataDir),
 		agents:       agents,
+		assets:       NewAssetRegistry(dataDir),
 		events:       NewEventStoreForDataDir(dataDir),
+		dataDir:      dataDir,
 	}
 }
 
@@ -114,22 +118,14 @@ func (t Tool) RunWithProgress(request string, reporter ProgressReporter, options
 }
 
 func (t Tool) RunContext(ctx context.Context, request string, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
-	if strings.TrimSpace(request) == "" {
-		return nil, fmt.Errorf("request 문자열이 필요합니다")
-	}
-	runOptions := map[string]any{}
-	if len(options) > 0 && options[0] != nil {
-		runOptions = options[0]
-	}
-	analysis, err := t.analyzeRequest(request)
+	reportProgress(reporter, 0, 1, "prepare_workflow started")
+	result, err := t.PrepareWorkflow(request, options...)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := t.agents.ResolvePlan(analysis.Plan, runOptions)
-	if err != nil {
-		return nil, err
-	}
-	return t.executePlan(ctx, request, plan, runOptions, analysis.Source, analysis.FallbackReason, "run", reporter)
+	result["action"] = "run"
+	reportProgress(reporter, 1, 1, "prepare_workflow completed")
+	return result, nil
 }
 
 func (t Tool) RunPlan(request string, stages []StageDef, options ...map[string]any) (map[string]any, error) {
@@ -175,6 +171,100 @@ func (t Tool) ValidatePlan(request string, stages []StageDef) (map[string]any, e
 		"plan":       plan,
 		"analyzer":   AnalyzerClient,
 	}, nil
+}
+
+func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(request) == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
+	runOptions := map[string]any{}
+	if len(options) > 0 && options[0] != nil {
+		runOptions = options[0]
+	}
+
+	analysis, err := t.analyzeRequest(request)
+	if err != nil {
+		return nil, err
+	}
+
+	runID := createRunID()
+	createdAt := time.Now().UTC()
+	pkg := BuildWorkflowPackageFromPlan(runID, request, analysis.Plan, analysis.WorkflowAssets)
+	existingAgents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	for index, agent := range pkg.Agents {
+		originalID := agent.ID
+		selected, err := t.selectPreparedAgentAsset(existingAgents, agent, runOptions)
+		if err != nil {
+			return nil, err
+		}
+		selected.Skills = mergeStrings(selected.Skills, agent.Skills)
+		if err := t.assets.UpsertAgent(selected); err != nil {
+			return nil, err
+		}
+		if !containsAgentAssetID(existingAgents, selected.ID) {
+			existingAgents = append(existingAgents, selected)
+		} else {
+			existingAgents = replaceAgentAsset(existingAgents, selected)
+		}
+		pkg.Agents[index] = selected
+		replaceWorkflowAgentID(&pkg, originalID, selected.ID)
+	}
+	for _, skill := range pkg.Skills {
+		if err := t.assets.UpsertSkill(skill); err != nil {
+			return nil, err
+		}
+	}
+
+	written, err := WriteWorkflowPackage(t.dataDir, pkg)
+	if err != nil {
+		return nil, err
+	}
+	pkg = written.Package
+	completedAt := time.Now().UTC()
+	summary := Summary{
+		TotalStages: len(pkg.Tasks),
+		Success:     0,
+		Failed:      0,
+		OutputDir:   written.OutputDir,
+		Files:       written.Files,
+	}
+	record := RunRecord{
+		RunID:          runID,
+		Status:         "prepared",
+		Request:        request,
+		Analyzer:       analysis.Source,
+		FallbackReason: analysis.FallbackReason,
+		OutputDir:      written.OutputDir,
+		Summary:        summary,
+		Stages:         preparedStageResults(pkg.Tasks, createdAt, completedAt),
+		CreatedAt:      createdAt,
+		CompletedAt:    completedAt,
+	}
+	if err := t.store.Save(record); err != nil {
+		return nil, err
+	}
+	if err := t.events.SaveRun(record); err != nil {
+		return nil, err
+	}
+
+	result := map[string]any{
+		"ok":        true,
+		"action":    "prepare_workflow",
+		"runId":     record.RunID,
+		"status":    record.Status,
+		"request":   request,
+		"analyzer":  record.Analyzer,
+		"outputDir": record.OutputDir,
+		"workflow":  pkg,
+		"summary":   summary,
+	}
+	if record.FallbackReason != "" {
+		result["fallbackReason"] = record.FallbackReason
+	}
+	return result, nil
 }
 
 func (t Tool) normalizeClientPlan(request string, stages []StageDef) (Plan, error) {
@@ -357,6 +447,155 @@ func (t Tool) ListAgents() (map[string]any, error) {
 	}, nil
 }
 
+func (t Tool) ListSkills() (map[string]any, error) {
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":     true,
+		"action": "list_skills",
+		"count":  len(skills),
+		"skills": skills,
+	}, nil
+}
+
+func (t Tool) ListAssets() (map[string]any, error) {
+	agents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "list_assets",
+		"agents":  agents,
+		"skills":  skills,
+		"counts":  map[string]int{"agents": len(agents), "skills": len(skills)},
+		"options": agentPolicyOptions(),
+	}, nil
+}
+
+func (t Tool) RecommendAssets(request string) (map[string]any, error) {
+	agents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "recommend_assets",
+		"request": request,
+		"agents":  activeAgentAssets(agents),
+		"skills":  activeSkillAssets(skills),
+	}, nil
+}
+
+func (t Tool) RecordOutcome(args map[string]any) (map[string]any, error) {
+	assetID := requiredString(args, "assetId")
+	if strings.TrimSpace(assetID) == "" {
+		return nil, fmt.Errorf("assetId 문자열이 필요합니다")
+	}
+	kind := requiredString(args, "kind")
+	if strings.TrimSpace(kind) == "" {
+		return nil, fmt.Errorf("kind 문자열이 필요합니다")
+	}
+	if kind != AssetKindAgent && kind != AssetKindSkill {
+		return nil, fmt.Errorf("kind must be %q or %q", AssetKindAgent, AssetKindSkill)
+	}
+	status := requiredString(args, "status")
+	if strings.TrimSpace(status) == "" {
+		return nil, fmt.Errorf("status 문자열이 필요합니다")
+	}
+	if status != "success" && status != "error" {
+		return nil, fmt.Errorf("status must be %q or %q", "success", "error")
+	}
+
+	outcome := AssetOutcome{
+		AssetID:     assetID,
+		Kind:        kind,
+		Status:      status,
+		CompletedAt: time.Now().UTC(),
+	}
+	if value, ok := args["runId"].(string); ok {
+		outcome.RunID = value
+	}
+	if value, ok := args["error"].(string); ok {
+		outcome.Error = value
+	}
+	if value, ok := args["lesson"].(string); ok {
+		outcome.Lesson = value
+	}
+	if err := t.assets.RecordOutcome(outcome); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "record_outcome",
+		"assetId": assetID,
+		"kind":    kind,
+		"status":  status,
+	}, nil
+}
+
+func (t Tool) GetWorkflow(runID string) (map[string]any, error) {
+	record, err := t.workflowRunRecord(runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(record.OutputDir, "workflow.json"))
+	if err != nil {
+		return nil, err
+	}
+	var workflow any
+	if err := json.Unmarshal(data, &workflow); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":       true,
+		"action":   "get_workflow",
+		"runId":    record.RunID,
+		"workflow": workflow,
+	}, nil
+}
+
+func (t Tool) GetWorkflowHandoff(runID string) (map[string]any, error) {
+	record, err := t.workflowRunRecord(runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(record.OutputDir, "handoff.md"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "get_workflow_handoff",
+		"runId":   record.RunID,
+		"handoff": string(data),
+	}, nil
+}
+
+func (t Tool) workflowRunRecord(runID string) (RunRecord, error) {
+	if strings.TrimSpace(runID) == "" {
+		return RunRecord{}, fmt.Errorf("runId 문자열이 필요합니다")
+	}
+	record, err := t.store.Find(runID)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	if strings.TrimSpace(record.OutputDir) == "" {
+		return RunRecord{}, fmt.Errorf("workflow 출력 디렉토리가 없습니다")
+	}
+	return record, nil
+}
+
 func (t Tool) ListRuns() (map[string]any, error) {
 	runs, err := t.store.List()
 	if err != nil {
@@ -450,6 +689,12 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 			return nil, err
 		}
 		return t.ValidatePlan(requiredString(params, "request"), stages)
+	case "prepare_workflow":
+		return t.PrepareWorkflow(requiredString(params, "request"), optionalObject(params, "options"))
+	case "recommend_assets":
+		return t.RecommendAssets(requiredString(params, "request"))
+	case "record_outcome":
+		return t.RecordOutcome(params)
 	case "orchestrate":
 		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
 	case "status", "get_status":
@@ -460,6 +705,14 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 		return t.ListEvents(requiredString(params, "runId"))
 	case "list_agents":
 		return t.ListAgents()
+	case "list_assets":
+		return t.ListAssets()
+	case "list_skills":
+		return t.ListSkills()
+	case "get_workflow":
+		return t.GetWorkflow(requiredString(params, "runId"))
+	case "get_workflow_handoff":
+		return t.GetWorkflowHandoff(requiredString(params, "runId"))
 	case "open_output":
 		return t.OpenOutput(requiredString(params, "runId"))
 	default:
@@ -472,6 +725,144 @@ func DefaultDataDir() string {
 		return value
 	}
 	return ".verdandi"
+}
+
+func findReusableAgentAsset(existing []AgentAsset, candidate AgentAsset) (AgentAsset, bool) {
+	for _, agent := range existing {
+		if !strings.EqualFold(agent.Name, candidate.Name) {
+			continue
+		}
+		if agent.Status != AssetStatusActive {
+			continue
+		}
+		return agent, true
+	}
+	return AgentAsset{}, false
+}
+
+func (t Tool) selectPreparedAgentAsset(existing []AgentAsset, candidate AgentAsset, options map[string]any) (AgentAsset, error) {
+	active, found := findReusableAgentAsset(existing, candidate)
+	policy, hasPolicy := explicitAgentPolicy(options)
+	if !hasPolicy {
+		if found {
+			return active, nil
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	}
+	switch policy {
+	case AgentPolicyReuseEnhance:
+		if found {
+			return active, nil
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	case AgentPolicyRewrite:
+		if found {
+			return t.assets.SaveAgentVersion(candidate, active.ID)
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	case AgentPolicySeparate:
+		if found {
+			candidate.Name = uniqueSeparateAssetName(candidate.Name, existing)
+			candidate.ID = ""
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	default:
+		return AgentAsset{}, fmt.Errorf("unknown agent policy: %s", policy)
+	}
+}
+
+func containsAgentAssetID(agents []AgentAsset, id string) bool {
+	for _, agent := range agents {
+		if agent.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceAgentAsset(agents []AgentAsset, replacement AgentAsset) []AgentAsset {
+	updated := append([]AgentAsset{}, agents...)
+	for index, agent := range updated {
+		if agent.ID == replacement.ID {
+			updated[index] = replacement
+			return updated
+		}
+	}
+	return append(updated, replacement)
+}
+
+func uniqueSeparateAssetName(base string, existing []AgentAsset) string {
+	if strings.TrimSpace(base) == "" {
+		base = "SeparateAgent"
+	}
+	names := map[string]bool{}
+	for _, agent := range existing {
+		names[strings.ToLower(agent.Name)] = true
+	}
+	for index := 2; ; index++ {
+		candidate := fmt.Sprintf("%sSeparate%d", base, index)
+		if !names[strings.ToLower(candidate)] {
+			return candidate
+		}
+	}
+}
+
+func replaceWorkflowAgentID(pkg *WorkflowPackage, oldID string, newID string) {
+	if oldID == newID {
+		return
+	}
+	for taskIndex := range pkg.Tasks {
+		if pkg.Tasks[taskIndex].AgentID == oldID {
+			pkg.Tasks[taskIndex].AgentID = newID
+		}
+	}
+	for skillIndex := range pkg.Skills {
+		for usedByIndex, usedByAgent := range pkg.Skills[skillIndex].UsedByAgents {
+			if usedByAgent == oldID {
+				pkg.Skills[skillIndex].UsedByAgents[usedByIndex] = newID
+			}
+		}
+	}
+}
+
+func activeAgentAssets(agents []AgentAsset) []AgentAsset {
+	filtered := make([]AgentAsset, 0, len(agents))
+	for _, agent := range agents {
+		if agent.Status != AssetStatusActive {
+			continue
+		}
+		filtered = append(filtered, agent)
+	}
+	return filtered
+}
+
+func activeSkillAssets(skills []SkillAsset) []SkillAsset {
+	filtered := make([]SkillAsset, 0, len(skills))
+	for _, skill := range skills {
+		if skill.Status != AssetStatusActive {
+			continue
+		}
+		filtered = append(filtered, skill)
+	}
+	return filtered
+}
+
+func preparedStageResults(tasks []WorkflowTask, started time.Time, ended time.Time) []StageResult {
+	stages := make([]StageResult, 0, len(tasks))
+	for _, task := range tasks {
+		stages = append(stages, StageResult{
+			Stage:  task.ID,
+			Status: "prepared",
+			Result: &StageOutput{
+				Type:    "workflow-task",
+				Status:  "prepared",
+				Message: task.Description,
+			},
+			Started: started,
+			Ended:   ended,
+		})
+	}
+	return stages
 }
 
 func requiredString(params map[string]any, key string) string {

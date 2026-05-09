@@ -255,6 +255,102 @@ func TestLLMAnalyzerParsesAgentLifecycleDecision(t *testing.T) {
 	}
 }
 
+func TestLLMAnalyzerParsesWorkflowAssets(t *testing.T) {
+	content := `{
+		"intent": "orchestrator",
+		"confidence": 0.91,
+		"keywords": ["go", "cli", "calculator", "tdd"],
+		"complexity": {"level": "MEDIUM", "score": 4},
+		"stages": [
+			{"stage": "planner", "keyword": "plan"},
+			{"stage": "code-writer", "keyword": "implement"},
+			{"stage": "tester", "keyword": "verify"}
+		],
+		"agents": [
+			{
+				"name": "GoCalculatorImplementer",
+				"role": "code-writer",
+				"capabilities": ["go", "cli", "calculator", "tdd"]
+			}
+		],
+		"skills": [
+			{
+				"name": "go-cli-calculator-tdd",
+				"description": "Build Go calculator CLIs with tests first.",
+				"whenToUse": "When implementing Go calculator CLI behavior.",
+				"instructions": "Write failing tests for add, subtract, multiply, divide before implementation.",
+				"inputs": ["request", "acceptanceCriteria"],
+				"outputs": ["patch", "testResults"],
+				"constraints": ["External coding agent writes code, not Verdandi."]
+			}
+		]
+	}`
+	result := analyzeWithLLMContent(t, content, "Go calculator CLI를 TDD로 구현")
+
+	if len(result.WorkflowAssets.Agents) != 1 {
+		t.Fatalf("expected one workflow agent asset, got %#v", result.WorkflowAssets.Agents)
+	}
+	agent := result.WorkflowAssets.Agents[0]
+	if agent.Name != "GoCalculatorImplementer" || agent.Role != "code-writer" {
+		t.Fatalf("unexpected workflow agent: %#v", agent)
+	}
+	if agent.Contract.Spec.Role != "code-writer" || !equalStrings(agent.Contract.Spec.Capabilities, []string{"go", "cli", "calculator", "tdd"}) {
+		t.Fatalf("unexpected agent contract: %#v", agent.Contract)
+	}
+	if agent.ID == "" || agent.Status != AssetStatusActive {
+		t.Fatalf("expected normalized active agent asset, got %#v", agent)
+	}
+
+	if len(result.WorkflowAssets.Skills) != 1 {
+		t.Fatalf("expected one workflow skill asset, got %#v", result.WorkflowAssets.Skills)
+	}
+	skill := result.WorkflowAssets.Skills[0]
+	if skill.Name != "go-cli-calculator-tdd" || skill.Contract.Name != "go-cli-calculator-tdd" {
+		t.Fatalf("unexpected workflow skill: %#v", skill)
+	}
+	if !strings.Contains(skill.Contract.Instructions, "failing tests") {
+		t.Fatalf("expected skill instructions to be preserved, got %#v", skill.Contract)
+	}
+	if skill.ID == "" || skill.Status != AssetStatusActive {
+		t.Fatalf("expected normalized active skill asset, got %#v", skill)
+	}
+}
+
+func TestLLMAnalyzerParsesWorkflowAgentContractShape(t *testing.T) {
+	content := `{
+		"intent": "orchestrator",
+		"confidence": 0.91,
+		"keywords": ["go", "cli"],
+		"complexity": {"level": "MEDIUM", "score": 4},
+		"stages": [
+			{"stage": "code-writer", "keyword": "implement"}
+		],
+		"agents": [
+			{
+				"name": "GoCLIContractAgent",
+				"description": "Builds Go CLIs from existing repo patterns.",
+				"command": "codex",
+				"spec": {
+					"role": "go cli engineer",
+					"capabilities": ["go", "cli", "tests"]
+				}
+			}
+		]
+	}`
+	result := analyzeWithLLMContent(t, content, "Go CLI 구현")
+
+	if len(result.WorkflowAssets.Agents) != 1 {
+		t.Fatalf("expected one workflow agent asset, got %#v", result.WorkflowAssets.Agents)
+	}
+	agent := result.WorkflowAssets.Agents[0]
+	if agent.Role != "go cli engineer" || agent.Contract.Spec.Role != "go cli engineer" {
+		t.Fatalf("expected contract-shaped role to be preserved, got %#v", agent)
+	}
+	if !equalStrings(agent.Contract.Spec.Capabilities, []string{"go", "cli", "tests"}) {
+		t.Fatalf("expected contract-shaped capabilities to be preserved, got %#v", agent.Contract.Spec.Capabilities)
+	}
+}
+
 func analyzeWithLLMContent(t *testing.T, content string, request string) AnalysisResult {
 	t.Helper()
 

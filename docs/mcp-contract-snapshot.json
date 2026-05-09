@@ -55,6 +55,20 @@
         "type": "ref/resource",
         "uri": "verdandi://runs/{runId}/output"
       }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://workflows/{runId}"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://workflows/{runId}/handoff"
+      }
     }
   ],
   "initialize": {
@@ -164,6 +178,20 @@
       "name": "run-output",
       "title": "Verdandi Run Output",
       "uriTemplate": "verdandi://runs/{runId}/output"
+    },
+    {
+      "description": "Read a prepared workflow package by runId.",
+      "mimeType": "application/json",
+      "name": "workflow",
+      "title": "Verdandi Workflow",
+      "uriTemplate": "verdandi://workflows/{runId}"
+    },
+    {
+      "description": "Read the Markdown handoff prompt for a prepared workflow.",
+      "mimeType": "text/markdown",
+      "name": "workflow-handoff",
+      "title": "Verdandi Workflow Handoff",
+      "uriTemplate": "verdandi://workflows/{runId}/handoff"
     }
   ],
   "resources": [
@@ -180,6 +208,20 @@
       "name": "agents",
       "title": "Verdandi Agents",
       "uri": "verdandi://agents"
+    },
+    {
+      "description": "List persisted agent and skill assets.",
+      "mimeType": "application/json",
+      "name": "assets",
+      "title": "Verdandi Assets",
+      "uri": "verdandi://assets"
+    },
+    {
+      "description": "List persisted skill assets.",
+      "mimeType": "application/json",
+      "name": "skills",
+      "title": "Verdandi Skills",
+      "uri": "verdandi://skills"
     }
   ],
   "tools": [
@@ -220,6 +262,85 @@
       },
       "name": "analyze",
       "title": "Analyze request"
+    },
+    {
+      "description": "Create or reuse persistent agent and skill assets, then return a workflow handoff package for the external LLM coding agent.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "type": "object"
+          },
+          "request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "prepare_workflow",
+      "title": "Prepare Verdandi workflow"
+    },
+    {
+      "description": "List existing reusable agent and skill assets relevant to a request.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "recommend_assets",
+      "title": "Recommend Verdandi assets"
+    },
+    {
+      "description": "Record success, failure, and lessons for a persistent agent or skill asset after an external coding agent uses it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "assetId": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "agent",
+              "skill"
+            ],
+            "type": "string"
+          },
+          "lesson": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "success",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetId",
+          "kind",
+          "status"
+        ],
+        "type": "object"
+      },
+      "name": "record_outcome",
+      "title": "Record asset outcome"
     },
     {
       "description": "Run an ordered Verdandi stage plan selected by the MCP client after Verdandi validates and normalizes it.",
@@ -378,6 +499,17 @@
       },
       "name": "list_agents",
       "title": "List Verdandi agents"
+    },
+    {
+      "description": "List persisted skill assets and lifecycle status.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "list_skills",
+      "title": "List Verdandi skills"
     }
   ],
   "transports": {

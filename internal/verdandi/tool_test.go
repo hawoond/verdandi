@@ -63,6 +63,121 @@ func TestToolRunRejectsEmptyRequest(t *testing.T) {
 	}
 }
 
+func TestRunPreparesWorkflowInsteadOfGeneratingAppCode(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Run("계산기 앱을 기획하고 구현하고 테스트해줘")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	if result["action"] != "run" {
+		t.Fatalf("expected run compatibility action, got %#v", result["action"])
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", result["status"])
+	}
+	outputDir := result["outputDir"].(string)
+	for _, name := range []string{"workflow.json", "handoff.md", "selected-assets.json"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+			t.Fatalf("expected workflow package file %s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "main.go")); !os.IsNotExist(err) {
+		t.Fatalf("run must not generate application source main.go, stat err = %v", err)
+	}
+	handoff, err := os.ReadFile(filepath.Join(outputDir, "handoff.md"))
+	if err != nil {
+		t.Fatalf("read handoff: %v", err)
+	}
+	if !strings.Contains(string(handoff), "Verdandi does not write application code") {
+		t.Fatalf("handoff should describe workflow preparation boundary: %s", string(handoff))
+	}
+	events, err := tool.ListEvents(result["runId"].(string))
+	if err != nil {
+		t.Fatalf("prepared run should write events: %v", err)
+	}
+	seenEvents := map[string]bool{}
+	for _, event := range events["events"].([]VisualizationEvent) {
+		seenEvents[event.Type] = true
+	}
+	for _, eventType := range []string{EventRunStarted, EventStageStarted, EventStageCompleted, EventRunCompleted} {
+		if !seenEvents[eventType] {
+			t.Fatalf("prepared run events missing %q in %#v", eventType, seenEvents)
+		}
+	}
+}
+
+func TestRunWithProgressReportsWorkflowPreparation(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+	progress := []ProgressEvent{}
+
+	if _, err := tool.RunWithProgress("계산기 앱을 기획하고 구현하고 테스트해줘", func(event ProgressEvent) {
+		progress = append(progress, event)
+	}); err != nil {
+		t.Fatalf("run with progress failed: %v", err)
+	}
+
+	if len(progress) != 2 {
+		t.Fatalf("expected two progress events, got %#v", progress)
+	}
+	if progress[0].Progress != 0 || progress[0].Total != 1 || !strings.Contains(progress[0].Message, "started") {
+		t.Fatalf("unexpected start progress: %#v", progress[0])
+	}
+	if progress[1].Progress != 1 || progress[1].Total != 1 || !strings.Contains(progress[1].Message, "completed") {
+		t.Fatalf("unexpected completion progress: %#v", progress[1])
+	}
+}
+
+func TestRunOptionsRewritePreparedWorkflowAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "계산기 앱을 구현하고 테스트해줘"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent: IntentResult{Category: IntentCodeWriter, Confidence: 0.9},
+			Plan:   plan,
+			Source: AnalyzerKeyword,
+		},
+	})
+
+	first, err := tool.Run(request)
+	if err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	second, err := tool.Run(request, map[string]any{"agentPolicy": AgentPolicyRewrite})
+	if err != nil {
+		t.Fatalf("rewrite run failed: %v", err)
+	}
+
+	firstWorkflow := first["workflow"].(WorkflowPackage)
+	secondWorkflow := second["workflow"].(WorkflowPackage)
+	if firstWorkflow.Agents[0].ID == secondWorkflow.Agents[0].ID {
+		t.Fatalf("rewrite policy should create a new prepared agent version, got %q", secondWorkflow.Agents[0].ID)
+	}
+	agents, err := NewAssetRegistry(dataDir).ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	byID := map[string]AgentAsset{}
+	for _, agent := range agents {
+		byID[agent.ID] = agent
+	}
+	if byID[firstWorkflow.Agents[0].ID].Status != AssetStatusSuperseded {
+		t.Fatalf("first agent status = %q, want superseded", byID[firstWorkflow.Agents[0].ID].Status)
+	}
+	if byID[secondWorkflow.Agents[0].ID].Status != AssetStatusActive {
+		t.Fatalf("second agent status = %q, want active", byID[secondWorkflow.Agents[0].ID].Status)
+	}
+}
+
 func TestToolRunPlanExecutesClientSelectedStagesWithoutAnalyzer(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{err: errors.New("analyzer should not be called")})
@@ -201,6 +316,603 @@ func TestToolAnalyzeReturnsExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkflowCreatesPersistentReusableAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "접근성 좋은 계산기 앱을 기획하고 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "planner", Keyword: "기획"},
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentPlanner, Confidence: 0.92},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 5},
+			Plan:       plan,
+			Source:     AnalyzerKeyword,
+		},
+	})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow failed: %v", err)
+	}
+
+	if result["ok"] != true {
+		t.Fatalf("expected ok result, got %#v", result)
+	}
+	if result["action"] != "prepare_workflow" {
+		t.Fatalf("expected prepare_workflow action, got %#v", result["action"])
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", result["status"])
+	}
+	runID, ok := result["runId"].(string)
+	if !ok || runID == "" {
+		t.Fatalf("expected runId, got %#v", result["runId"])
+	}
+	outputDir, ok := result["outputDir"].(string)
+	if !ok || outputDir == "" {
+		t.Fatalf("expected outputDir, got %#v", result["outputDir"])
+	}
+	if !strings.HasPrefix(outputDir, filepath.Join(dataDir, "workflows", runID)) {
+		t.Fatalf("workflow outputDir %q is not under data dir run path", outputDir)
+	}
+	for _, name := range []string{"workflow.json", "handoff.md", "selected-assets.json"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+			t.Fatalf("expected workflow file %s: %v", name, err)
+		}
+	}
+
+	workflow, ok := result["workflow"].(WorkflowPackage)
+	if !ok {
+		t.Fatalf("expected typed WorkflowPackage, got %#v", result["workflow"])
+	}
+	if workflow.RunID != runID {
+		t.Fatalf("workflow runID = %q, want %q", workflow.RunID, runID)
+	}
+	if len(workflow.Agents) == 0 || len(workflow.Skills) == 0 || len(workflow.Tasks) == 0 {
+		t.Fatalf("expected reusable assets and tasks, got %#v", workflow)
+	}
+	assertWorkflowTasksReferenceAssets(t, workflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if len(agents) != len(workflow.Agents) {
+		t.Fatalf("registry agents = %d, workflow agents = %d", len(agents), len(workflow.Agents))
+	}
+	if len(skills) != len(workflow.Skills) {
+		t.Fatalf("registry skills = %d, workflow skills = %d", len(skills), len(workflow.Skills))
+	}
+
+	status, err := tool.GetStatus(runID)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
+	if status["status"] != "prepared" {
+		t.Fatalf("stored status = %#v, want prepared", status["status"])
+	}
+	summary := result["summary"].(Summary)
+	if summary.Success != 0 || summary.Failed != 0 {
+		t.Fatalf("prepared summary should not report execution success/failure, got %#v", summary)
+	}
+}
+
+func TestPrepareWorkflowUsesAnalyzerProvidedAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "React 대시보드 구현"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "react"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Text:   request,
+		Intent: IntentResult{Category: IntentOrchestrator, Confidence: 0.9},
+		Plan:   plan,
+		Source: AnalyzerLLM,
+		WorkflowAssets: WorkflowAssets{
+			Agents: []AgentAsset{{
+				Name: "ReactDashboardImplementer",
+				Role: "code-writer",
+				Contract: AgentContract{
+					Name: "ReactDashboardImplementer",
+					Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react", "dashboard", "typescript"}},
+				},
+			}},
+			Skills: []SkillAsset{{
+				Name: "react-dashboard-builder",
+				Contract: SkillContract{
+					Name:         "react-dashboard-builder",
+					Description:  "Build production React dashboards.",
+					WhenToUse:    "React dashboard implementation tasks.",
+					Instructions: "Use existing app patterns and verify responsive layout.",
+					Inputs:       []string{"request"},
+					Outputs:      []string{"patch"},
+					Constraints:  []string{"External coding agent writes code."},
+				},
+			}},
+		},
+	}})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow returned error: %v", err)
+	}
+	workflow := result["workflow"].(WorkflowPackage)
+	if workflow.Agents[0].Name != "ReactDashboardImplementer" {
+		t.Fatalf("agent = %q, want ReactDashboardImplementer", workflow.Agents[0].Name)
+	}
+	if workflow.Skills[0].Name != "react-dashboard-builder" {
+		t.Fatalf("skill = %q, want react-dashboard-builder", workflow.Skills[0].Name)
+	}
+	assertWorkflowTasksReferenceAssets(t, workflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if !containsAgentAssetID(agents, workflow.Agents[0].ID) {
+		t.Fatalf("registry missing analyzer agent %q in %#v", workflow.Agents[0].ID, agents)
+	}
+	if !containsSkillAssetID(skills, workflow.Skills[0].ID) {
+		t.Fatalf("registry missing analyzer skill %q in %#v", workflow.Skills[0].ID, skills)
+	}
+}
+
+func TestPrepareWorkflowMergesAnalyzerSkillsIntoReusedAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "React 대시보드 구현"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "react"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	existing := normalizeAgentAsset(AgentAsset{
+		Name:   "ReactDashboardImplementer",
+		Role:   "code-writer",
+		Status: AssetStatusActive,
+		Contract: AgentContract{
+			Name: "ReactDashboardImplementer",
+			Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react"}},
+		},
+	}, "")
+	if err := NewAssetRegistry(dataDir).UpsertAgent(existing); err != nil {
+		t.Fatalf("seed existing agent: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{result: AnalysisResult{
+		Text:   request,
+		Intent: IntentResult{Category: IntentOrchestrator, Confidence: 0.9},
+		Plan:   plan,
+		Source: AnalyzerLLM,
+		WorkflowAssets: WorkflowAssets{
+			Agents: []AgentAsset{{
+				Name: "ReactDashboardImplementer",
+				Role: "code-writer",
+				Contract: AgentContract{
+					Name: "ReactDashboardImplementer",
+					Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"react", "dashboard"}},
+				},
+			}},
+			Skills: []SkillAsset{{
+				Name: "react-dashboard-builder",
+				Contract: SkillContract{
+					Name:         "react-dashboard-builder",
+					Description:  "Build production React dashboards.",
+					WhenToUse:    "React dashboard implementation tasks.",
+					Instructions: "Use existing app patterns and verify responsive layout.",
+				},
+			}},
+		},
+	}})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow returned error: %v", err)
+	}
+	workflow := result["workflow"].(WorkflowPackage)
+	if workflow.Agents[0].ID != existing.ID {
+		t.Fatalf("expected existing agent %q to be reused, got %#v", existing.ID, workflow.Agents[0])
+	}
+	skillID := workflow.Skills[0].ID
+	if !containsString(workflow.Agents[0].Skills, skillID) {
+		t.Fatalf("reused workflow agent missing analyzer skill %q: %#v", skillID, workflow.Agents[0])
+	}
+
+	agents, err := NewAssetRegistry(dataDir).ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	var persisted AgentAsset
+	for _, agent := range agents {
+		if agent.ID == existing.ID {
+			persisted = agent
+			break
+		}
+	}
+	if persisted.ID == "" {
+		t.Fatalf("registry missing reused agent %q in %#v", existing.ID, agents)
+	}
+	if !containsString(persisted.Skills, skillID) {
+		t.Fatalf("persisted reused agent missing analyzer skill %q: %#v", skillID, persisted)
+	}
+}
+
+func TestPrepareWorkflowReusesExistingAssetsWithoutActiveVersionChurn(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "접근성 좋은 계산기 앱을 기획하고 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "planner", Keyword: "기획"},
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentPlanner, Confidence: 0.92},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 5},
+			Plan:       plan,
+			Source:     AnalyzerKeyword,
+		},
+	})
+
+	first, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("first PrepareWorkflow failed: %v", err)
+	}
+	second, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("second PrepareWorkflow failed: %v", err)
+	}
+
+	firstWorkflow := first["workflow"].(WorkflowPackage)
+	secondWorkflow := second["workflow"].(WorkflowPackage)
+	assertWorkflowTasksReferenceAssets(t, firstWorkflow)
+	assertWorkflowTasksReferenceAssets(t, secondWorkflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents) != len(secondWorkflow.Agents) {
+		t.Fatalf("registry agents = %d, workflow agents = %d", len(agents), len(secondWorkflow.Agents))
+	}
+	activeByName := map[string]int{}
+	for _, agent := range agents {
+		if agent.Status == AssetStatusActive {
+			activeByName[agent.Name]++
+		}
+	}
+	for name, count := range activeByName {
+		if count > 1 {
+			t.Fatalf("agent %q has %d active versions; want at most 1", name, count)
+		}
+	}
+	for index, agent := range firstWorkflow.Agents {
+		if secondWorkflow.Agents[index].ID != agent.ID {
+			t.Fatalf("agent %d ID churned: first %q second %q", index, agent.ID, secondWorkflow.Agents[index].ID)
+		}
+	}
+}
+
+func TestPrepareWorkflowDoesNotReuseNeedsReviewAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "계산기 앱을 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	candidate := normalizeAgentAsset(assetAgentForStage(plan.Stages[0]), "")
+	needsReview := candidate
+	needsReview.Status = AssetStatusNeedsReview
+	if err := NewAssetRegistry(dataDir).UpsertAgent(needsReview); err != nil {
+		t.Fatalf("seed needs-review agent: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent: IntentResult{Category: IntentCodeWriter, Confidence: 0.9},
+			Plan:   plan,
+			Source: AnalyzerKeyword,
+		},
+	})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow failed: %v", err)
+	}
+
+	workflow := result["workflow"].(WorkflowPackage)
+	var implementationAgent AgentAsset
+	for _, agent := range workflow.Agents {
+		if agent.Name == needsReview.Name {
+			implementationAgent = agent
+			break
+		}
+	}
+	if implementationAgent.ID == "" {
+		t.Fatalf("expected workflow to include implementation agent named %q: %#v", needsReview.Name, workflow.Agents)
+	}
+	if implementationAgent.ID == needsReview.ID {
+		t.Fatalf("PrepareWorkflow reused needs-review agent %q", needsReview.ID)
+	}
+	if implementationAgent.Status != AssetStatusActive {
+		t.Fatalf("new workflow agent status = %q, want active", implementationAgent.Status)
+	}
+}
+
+func TestToolListSkillsReturnsPersistedSkillAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	skill := SkillAsset{
+		Name:    "go-cli-tdd",
+		Version: 1,
+		Status:  AssetStatusActive,
+		Contract: SkillContract{
+			Name:         "go-cli-tdd",
+			Description:  "Guide Go CLI implementation with tests first.",
+			WhenToUse:    "Use for Go command-line tools.",
+			Instructions: "Write failing tests before implementation.",
+			Inputs:       []string{"request"},
+			Outputs:      []string{"patch"},
+		},
+	}
+	if err := NewAssetRegistry(dataDir).UpsertSkill(skill); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("list_skills", map[string]any{})
+	if err != nil {
+		t.Fatalf("list_skills failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "list_skills" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["count"] != 1 {
+		t.Fatalf("count = %#v, want 1", result["count"])
+	}
+	skills := result["skills"].([]SkillAsset)
+	if len(skills) != 1 || skills[0].Name != "go-cli-tdd" {
+		t.Fatalf("skills = %#v, want seeded skill", skills)
+	}
+}
+
+func TestToolRecommendAssetsReturnsReusableAgentsAndSkills(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	for _, seed := range []struct {
+		name   string
+		status string
+	}{
+		{name: "GoCliImplementer", status: AssetStatusActive},
+		{name: "NeedsReviewImplementer", status: AssetStatusNeedsReview},
+		{name: "DeprecatedImplementer", status: AssetStatusDeprecated},
+		{name: "ArchivedImplementer", status: AssetStatusArchived},
+		{name: "SupersededImplementer", status: AssetStatusSuperseded},
+	} {
+		if err := registry.UpsertAgent(AgentAsset{
+			Name:     seed.name,
+			Role:     "code-writer",
+			Version:  1,
+			Status:   seed.status,
+			Contract: AgentContract{Name: seed.name, Spec: AgentSpec{Role: "code-writer"}},
+		}); err != nil {
+			t.Fatalf("seed agent %s: %v", seed.name, err)
+		}
+	}
+	for _, seed := range []struct {
+		name   string
+		status string
+	}{
+		{name: "go-cli-tdd", status: AssetStatusActive},
+		{name: "needs-review-tdd", status: AssetStatusNeedsReview},
+		{name: "deprecated-tdd", status: AssetStatusDeprecated},
+		{name: "archived-tdd", status: AssetStatusArchived},
+		{name: "superseded-tdd", status: AssetStatusSuperseded},
+	} {
+		if err := registry.UpsertSkill(SkillAsset{
+			Name:     seed.name,
+			Version:  1,
+			Status:   seed.status,
+			Contract: SkillContract{Name: seed.name},
+		}); err != nil {
+			t.Fatalf("seed skill %s: %v", seed.name, err)
+		}
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("recommend_assets", map[string]any{"request": "build a Go CLI with tests"})
+	if err != nil {
+		t.Fatalf("recommend_assets failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "recommend_assets" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["request"] != "build a Go CLI with tests" {
+		t.Fatalf("request was not echoed: %#v", result["request"])
+	}
+	agents := result["agents"].([]AgentAsset)
+	skills := result["skills"].([]SkillAsset)
+	if got := agentAssetNames(agents); !equalStrings(got, []string{"GoCliImplementer"}) {
+		t.Fatalf("agents = %#v, want seeded agent", agents)
+	}
+	if got := skillAssetNames(skills); !equalStrings(got, []string{"go-cli-tdd"}) {
+		t.Fatalf("skills = %#v, want seeded skill", skills)
+	}
+}
+
+func TestToolRecordOutcomeUpdatesAssetMetrics(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	skill := SkillAsset{
+		Name:     "go-cli-tdd",
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: SkillContract{Name: "go-cli-tdd"},
+	}
+	if err := registry.UpsertSkill(skill); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list seeded skills: %v", err)
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("record_outcome", map[string]any{
+		"assetId": skills[0].ID,
+		"kind":    AssetKindSkill,
+		"status":  "error",
+		"runId":   "run_test",
+		"error":   "missing assertion",
+		"lesson":  "Add a focused regression test before reusing this skill.",
+	})
+	if err != nil {
+		t.Fatalf("record_outcome failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "record_outcome" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["assetId"] != skills[0].ID || result["kind"] != AssetKindSkill || result["status"] != "error" {
+		t.Fatalf("unexpected outcome echo: %#v", result)
+	}
+	updated, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list updated skills: %v", err)
+	}
+	if updated[0].Metrics.TotalRuns != 1 || updated[0].Metrics.FailureRuns != 1 || updated[0].Metrics.LastError != "missing assertion" {
+		t.Fatalf("metrics were not updated: %#v", updated[0].Metrics)
+	}
+	if len(updated[0].Lessons) != 1 || updated[0].Lessons[0].RunID != "run_test" {
+		t.Fatalf("lesson was not recorded: %#v", updated[0].Lessons)
+	}
+}
+
+func TestToolRecordOutcomeRejectsInvalidKindAndStatus(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	if err := registry.UpsertSkill(SkillAsset{
+		Name:     "go-cli-tdd",
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: SkillContract{Name: "go-cli-tdd"},
+	}); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list seeded skills: %v", err)
+	}
+	tool := NewTool(Options{DataDir: dataDir})
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "invalid kind",
+			args: map[string]any{"assetId": skills[0].ID, "kind": "workflow", "status": "success"},
+			want: "kind",
+		},
+		{
+			name: "invalid status",
+			args: map[string]any{"assetId": skills[0].ID, "kind": AssetKindSkill, "status": "skipped"},
+			want: "status",
+		},
+		{
+			name: "nil params",
+			args: nil,
+			want: "assetId",
+		},
+		{
+			name: "missing assetId",
+			args: map[string]any{"kind": AssetKindSkill, "status": "success"},
+			want: "assetId",
+		},
+		{
+			name: "missing kind",
+			args: map[string]any{"assetId": skills[0].ID, "status": "success"},
+			want: "kind",
+		},
+		{
+			name: "missing status",
+			args: map[string]any{"assetId": skills[0].ID, "kind": AssetKindSkill},
+			want: "status",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tool.RecordOutcome(tc.args)
+			if err == nil {
+				t.Fatal("expected RecordOutcome to reject invalid args")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func assertWorkflowTasksReferenceAssets(t *testing.T, workflow WorkflowPackage) {
+	t.Helper()
+	agentIDs := map[string]bool{}
+	for _, agent := range workflow.Agents {
+		agentIDs[agent.ID] = true
+	}
+	skillIDs := map[string]bool{}
+	for _, skill := range workflow.Skills {
+		skillIDs[skill.ID] = true
+	}
+	for _, task := range workflow.Tasks {
+		if !agentIDs[task.AgentID] {
+			t.Fatalf("task %q references missing agent %q", task.ID, task.AgentID)
+		}
+		for _, skillID := range task.SkillIDs {
+			if !skillIDs[skillID] {
+				t.Fatalf("task %q references missing skill %q", task.ID, skillID)
+			}
+		}
+	}
+}
+
+func agentAssetNames(agents []AgentAsset) []string {
+	names := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		names = append(names, agent.Name)
+	}
+	return names
+}
+
+func skillAssetNames(skills []SkillAsset) []string {
+	names := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		names = append(names, skill.Name)
+	}
+	return names
+}
+
 func TestToolUsesConfiguredAnalyzer(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewTool(Options{
@@ -236,8 +948,8 @@ func TestToolStoresStatusAndListsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status failed: %v", err)
 	}
-	if status["status"] != "success" {
-		t.Fatalf("expected success status, got %#v", status["status"])
+	if status["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", status["status"])
 	}
 
 	opened, err := tool.OpenOutput(runID)
@@ -265,10 +977,7 @@ func TestToolRunWritesSpinningWheelEvents(t *testing.T) {
 		},
 	}))
 
-	result, err := tool.Run("시각화 이벤트 테스트")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	result := runAnalyzerPlanLegacyForTest(t, tool, "시각화 이벤트 테스트")
 
 	runID := result["runId"].(string)
 	eventsPath := filepath.Join(dataDir, "events", runID+".jsonl")
@@ -329,10 +1038,7 @@ func TestToolRunWritesUpdatedMetricsEvent(t *testing.T) {
 		},
 	}))
 
-	result, err := tool.Run("metrics 이벤트 테스트")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	result := runAnalyzerPlanLegacyForTest(t, tool, "metrics 이벤트 테스트")
 
 	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
 	if err != nil {
@@ -356,9 +1062,10 @@ func TestToolRunWritesFallbackSpinningWheelAgentsForKeywordStages(t *testing.T) 
 	dataDir := t.TempDir()
 	tool := NewTool(Options{DataDir: dataDir})
 
-	result, err := tool.Run("기획 구현 테스트 문서화")
+	plan := tool.orchestrator.ParseRequest("기획 구현 테스트 문서화")
+	result, err := tool.RunPlan("기획 구현 테스트 문서화", plan.Stages)
 	if err != nil {
-		t.Fatalf("run failed: %v", err)
+		t.Fatalf("run_plan failed: %v", err)
 	}
 
 	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
@@ -452,8 +1159,8 @@ func TestToolRunUsesAnalyzerPlan(t *testing.T) {
 		t.Fatalf("status failed: %v", err)
 	}
 	stages := status["stages"].([]StageResult)
-	if len(stages) != 1 || stages[0].Stage != "documenter" {
-		t.Fatalf("expected documenter-only run, got %#v", stages)
+	if len(stages) != 1 || stages[0].Stage != "01-documenter" || stages[0].Status != "prepared" {
+		t.Fatalf("expected prepared documenter-only workflow, got %#v", stages)
 	}
 	if status["analyzer"] != AnalyzerLLM {
 		t.Fatalf("expected analyzer in status, got %#v", status["analyzer"])
@@ -541,16 +1248,9 @@ func TestToolAnalyzeAndRunExposeDynamicAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	status, err := tool.GetStatus(run["runId"].(string))
-	if err != nil {
-		t.Fatalf("status failed: %v", err)
-	}
-	stages := status["stages"].([]StageResult)
-	if stages[0].Stage != "code-writer" || stages[0].Result == nil {
-		t.Fatalf("expected code writer execution, got %#v", stages)
-	}
-	if stages[0].Agent == nil || stages[0].Agent.Name != "AccessibilityFocusedFrontendAgent" {
-		t.Fatalf("expected selected dynamic agent in stage result, got %#v", stages[0].Agent)
+	workflow := run["workflow"].(WorkflowPackage)
+	if len(workflow.Agents) == 0 || workflow.Agents[0].Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("expected dynamic agent asset in workflow, got %#v", workflow.Agents)
 	}
 }
 
@@ -564,9 +1264,7 @@ func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
 			Capabilities: []string{"accessibility", "semantic-html"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 접근성 UI 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 접근성 UI 에이전트 생성")
 
 	secondTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "접근성 좋은 대시보드 구현", AgentContract{
 		Name:        "DashboardAccessibilityAgent",
@@ -576,10 +1274,7 @@ func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
 			Capabilities: []string{"accessibility", "dashboard-ui"},
 		},
 	}))
-	run, err := secondTool.Run("접근성 좋은 대시보드 구현")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, secondTool, "접근성 좋은 대시보드 구현")
 
 	status, err := secondTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -610,9 +1305,7 @@ func TestToolRunCanRewriteSimilarAgent(t *testing.T) {
 			Capabilities: []string{"documentation", "readme"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 문서 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 문서 에이전트 생성")
 
 	rewriteTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "문서 에이전트를 새 기준으로 재작성", AgentContract{
 		Name:        "ModernDocumentationAgent",
@@ -622,10 +1315,7 @@ func TestToolRunCanRewriteSimilarAgent(t *testing.T) {
 			Capabilities: []string{"documentation", "product-guide"},
 		},
 	}))
-	run, err := rewriteTool.Run("문서 에이전트를 새 기준으로 재작성", map[string]any{"agentPolicy": AgentPolicyRewrite})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, rewriteTool, "문서 에이전트를 새 기준으로 재작성", map[string]any{"agentPolicy": AgentPolicyRewrite})
 
 	status, err := rewriteTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -653,9 +1343,7 @@ func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
 			Capabilities: []string{"data-analysis", "reporting"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 분석 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 분석 에이전트 생성")
 
 	separateTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "별도 실험 분석 에이전트 생성", AgentContract{
 		Name:        "ExperimentAnalysisAgent",
@@ -665,10 +1353,7 @@ func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
 			Capabilities: []string{"data-analysis", "experimentation"},
 		},
 	}))
-	run, err := separateTool.Run("별도 실험 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, separateTool, "별도 실험 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
 
 	status, err := separateTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -696,9 +1381,7 @@ func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
 			Capabilities: []string{"accessibility", "semantic-html"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 접근성 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 접근성 에이전트 생성")
 
 	orchestrator := NewOrchestrator(dataDir)
 	plan, err := orchestrator.NormalizePlan("접근성 에이전트 재작성", []StageDef{{
@@ -728,10 +1411,7 @@ func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
 		Source:     AnalyzerLLM,
 	}})
 
-	run, err := tool.Run("접근성 에이전트 재작성")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "접근성 에이전트 재작성")
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -760,9 +1440,7 @@ func TestToolListAgentsReturnsPersistedContracts(t *testing.T) {
 			Capabilities: []string{"accessibility"},
 		},
 	}))
-	if _, err := tool.Run("접근성 UI 에이전트 생성"); err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, tool, "접근성 UI 에이전트 생성")
 
 	listed, err := tool.ListAgents()
 	if err != nil {
@@ -786,9 +1464,7 @@ func TestToolRecordsSuccessfulAgentPerformance(t *testing.T) {
 			Capabilities: []string{"accessibility"},
 		},
 	}))
-	if _, err := tool.Run("성공하는 접근성 UI 에이전트"); err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, tool, "성공하는 접근성 UI 에이전트")
 
 	listed, err := tool.ListAgents()
 	if err != nil {
@@ -831,10 +1507,7 @@ func TestToolRecordsFailedAgentPerformance(t *testing.T) {
 		Source:     AnalyzerLLM,
 	}})
 
-	run, err := tool.Run("테스트만 실행")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "테스트만 실행")
 	if run["status"] != "error" {
 		t.Fatalf("expected failed run status, got %#v", run)
 	}
@@ -934,10 +1607,7 @@ func TestToolRunAppliesLifecycleRecommendationWhenPolicyIsImplicit(t *testing.T)
 			Capabilities: []string{"accessibility", "ui-implementation", "design-system"},
 		},
 	}))
-	run, err := tool.Run("접근성 UI 에이전트 재구성")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "접근성 UI 에이전트 재구성")
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -983,10 +1653,7 @@ func TestToolRunOptionsOverrideLifecycleRecommendation(t *testing.T) {
 			Capabilities: []string{"data-analysis", "experimentation"},
 		},
 	}))
-	run, err := tool.Run("별도 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "별도 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -1036,8 +1703,12 @@ func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 			Model:    "test-model",
 		},
 	})
-	if _, err := tool.Run("접근성 에이전트 생성"); err != nil {
-		t.Fatalf("run failed: %v", err)
+	analysis, err := tool.analyzeRequest("접근성 에이전트 생성")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	if _, err := tool.RunPlan("접근성 에이전트 생성", analysis.Plan.Stages); err != nil {
+		t.Fatalf("run_plan failed: %v", err)
 	}
 	if _, err := tool.Analyze("저장된 에이전트 참고해서 분석"); err != nil {
 		t.Fatalf("analyze failed: %v", err)
@@ -1078,9 +1749,31 @@ func analyzerForAgentPlan(t *testing.T, dataDir string, request string, agent Ag
 	}
 }
 
+func runAnalyzerPlanLegacyForTest(t *testing.T, tool Tool, request string, options ...map[string]any) map[string]any {
+	t.Helper()
+	analysis, err := tool.analyzer.Analyze(request)
+	if err != nil {
+		t.Fatalf("analyze test plan failed: %v", err)
+	}
+	result, err := tool.RunPlan(request, analysis.Plan.Stages, options...)
+	if err != nil {
+		t.Fatalf("run_plan failed: %v", err)
+	}
+	return result
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSkillAssetID(skills []SkillAsset, id string) bool {
+	for _, skill := range skills {
+		if skill.ID == id {
 			return true
 		}
 	}
