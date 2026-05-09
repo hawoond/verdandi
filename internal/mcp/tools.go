@@ -166,6 +166,36 @@ func defaultTools() []Tool {
 			}),
 		},
 		{
+			Name:        "prepare_workflow",
+			Title:       "Prepare Verdandi workflow",
+			Description: "Create or reuse persistent agent and skill assets, then return a workflow handoff package for the external LLM coding agent.",
+			InputSchema: objectSchema([]string{"request"}, map[string]any{
+				"request": map[string]any{"type": "string"},
+				"options": map[string]any{"type": "object"},
+			}),
+		},
+		{
+			Name:        "recommend_assets",
+			Title:       "Recommend Verdandi assets",
+			Description: "List existing reusable agent and skill assets relevant to a request.",
+			InputSchema: objectSchema([]string{"request"}, map[string]any{
+				"request": map[string]any{"type": "string"},
+			}),
+		},
+		{
+			Name:        "record_outcome",
+			Title:       "Record asset outcome",
+			Description: "Record success, failure, and lessons for a persistent agent or skill asset after an external coding agent uses it.",
+			InputSchema: objectSchema([]string{"assetId", "kind", "status"}, map[string]any{
+				"assetId": map[string]any{"type": "string"},
+				"kind":    map[string]any{"type": "string", "enum": []string{"agent", "skill"}},
+				"status":  map[string]any{"type": "string", "enum": []string{"success", "error"}},
+				"runId":   map[string]any{"type": "string"},
+				"error":   map[string]any{"type": "string"},
+				"lesson":  map[string]any{"type": "string"},
+			}),
+		},
+		{
 			Name:        "run_plan",
 			Title:       "Run client-selected plan",
 			Description: "Run an ordered Verdandi stage plan selected by the MCP client after Verdandi validates and normalizes it.",
@@ -213,6 +243,12 @@ func defaultTools() []Tool {
 			Name:        "list_agents",
 			Title:       "List Verdandi agents",
 			Description: "List persisted dynamic agent contracts and lifecycle policy options.",
+			InputSchema: objectSchema([]string{}, map[string]any{}),
+		},
+		{
+			Name:        "list_skills",
+			Title:       "List Verdandi skills",
+			Description: "List persisted skill assets and lifecycle status.",
 			InputSchema: objectSchema([]string{}, map[string]any{}),
 		},
 	}

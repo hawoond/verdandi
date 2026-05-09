@@ -443,6 +443,84 @@ func (t Tool) ListAgents() (map[string]any, error) {
 	}, nil
 }
 
+func (t Tool) ListSkills() (map[string]any, error) {
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":     true,
+		"action": "list_skills",
+		"count":  len(skills),
+		"skills": skills,
+	}, nil
+}
+
+func (t Tool) RecommendAssets(request string) (map[string]any, error) {
+	agents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "recommend_assets",
+		"request": request,
+		"agents":  activeAgentAssets(agents),
+		"skills":  activeSkillAssets(skills),
+	}, nil
+}
+
+func (t Tool) RecordOutcome(args map[string]any) (map[string]any, error) {
+	assetID := requiredString(args, "assetId")
+	if strings.TrimSpace(assetID) == "" {
+		return nil, fmt.Errorf("assetId 문자열이 필요합니다")
+	}
+	kind := requiredString(args, "kind")
+	if strings.TrimSpace(kind) == "" {
+		return nil, fmt.Errorf("kind 문자열이 필요합니다")
+	}
+	if kind != AssetKindAgent && kind != AssetKindSkill {
+		return nil, fmt.Errorf("kind must be %q or %q", AssetKindAgent, AssetKindSkill)
+	}
+	status := requiredString(args, "status")
+	if strings.TrimSpace(status) == "" {
+		return nil, fmt.Errorf("status 문자열이 필요합니다")
+	}
+	if status != "success" && status != "error" {
+		return nil, fmt.Errorf("status must be %q or %q", "success", "error")
+	}
+
+	outcome := AssetOutcome{
+		AssetID:     assetID,
+		Kind:        kind,
+		Status:      status,
+		CompletedAt: time.Now().UTC(),
+	}
+	if value, ok := args["runId"].(string); ok {
+		outcome.RunID = value
+	}
+	if value, ok := args["error"].(string); ok {
+		outcome.Error = value
+	}
+	if value, ok := args["lesson"].(string); ok {
+		outcome.Lesson = value
+	}
+	if err := t.assets.RecordOutcome(outcome); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "record_outcome",
+		"assetId": assetID,
+		"kind":    kind,
+		"status":  status,
+	}, nil
+}
+
 func (t Tool) ListRuns() (map[string]any, error) {
 	runs, err := t.store.List()
 	if err != nil {
@@ -538,6 +616,10 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 		return t.ValidatePlan(requiredString(params, "request"), stages)
 	case "prepare_workflow":
 		return t.PrepareWorkflow(requiredString(params, "request"), optionalObject(params, "options"))
+	case "recommend_assets":
+		return t.RecommendAssets(requiredString(params, "request"))
+	case "record_outcome":
+		return t.RecordOutcome(params)
 	case "orchestrate":
 		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
 	case "status", "get_status":
@@ -548,6 +630,8 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 		return t.ListEvents(requiredString(params, "runId"))
 	case "list_agents":
 		return t.ListAgents()
+	case "list_skills":
+		return t.ListSkills()
 	case "open_output":
 		return t.OpenOutput(requiredString(params, "runId"))
 	default:
@@ -591,6 +675,28 @@ func replaceWorkflowAgentID(pkg *WorkflowPackage, oldID string, newID string) {
 			}
 		}
 	}
+}
+
+func activeAgentAssets(agents []AgentAsset) []AgentAsset {
+	filtered := make([]AgentAsset, 0, len(agents))
+	for _, agent := range agents {
+		if agent.Status != AssetStatusActive {
+			continue
+		}
+		filtered = append(filtered, agent)
+	}
+	return filtered
+}
+
+func activeSkillAssets(skills []SkillAsset) []SkillAsset {
+	filtered := make([]SkillAsset, 0, len(skills))
+	for _, skill := range skills {
+		if skill.Status != AssetStatusActive {
+			continue
+		}
+		filtered = append(filtered, skill)
+	}
+	return filtered
 }
 
 func preparedStageResults(tasks []WorkflowTask, started time.Time, ended time.Time) []StageResult {

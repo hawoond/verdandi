@@ -401,6 +401,218 @@ func TestPrepareWorkflowDoesNotReuseNeedsReviewAgent(t *testing.T) {
 	}
 }
 
+func TestToolListSkillsReturnsPersistedSkillAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	skill := SkillAsset{
+		Name:    "go-cli-tdd",
+		Version: 1,
+		Status:  AssetStatusActive,
+		Contract: SkillContract{
+			Name:         "go-cli-tdd",
+			Description:  "Guide Go CLI implementation with tests first.",
+			WhenToUse:    "Use for Go command-line tools.",
+			Instructions: "Write failing tests before implementation.",
+			Inputs:       []string{"request"},
+			Outputs:      []string{"patch"},
+		},
+	}
+	if err := NewAssetRegistry(dataDir).UpsertSkill(skill); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("list_skills", map[string]any{})
+	if err != nil {
+		t.Fatalf("list_skills failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "list_skills" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["count"] != 1 {
+		t.Fatalf("count = %#v, want 1", result["count"])
+	}
+	skills := result["skills"].([]SkillAsset)
+	if len(skills) != 1 || skills[0].Name != "go-cli-tdd" {
+		t.Fatalf("skills = %#v, want seeded skill", skills)
+	}
+}
+
+func TestToolRecommendAssetsReturnsReusableAgentsAndSkills(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	for _, seed := range []struct {
+		name   string
+		status string
+	}{
+		{name: "GoCliImplementer", status: AssetStatusActive},
+		{name: "NeedsReviewImplementer", status: AssetStatusNeedsReview},
+		{name: "DeprecatedImplementer", status: AssetStatusDeprecated},
+		{name: "ArchivedImplementer", status: AssetStatusArchived},
+		{name: "SupersededImplementer", status: AssetStatusSuperseded},
+	} {
+		if err := registry.UpsertAgent(AgentAsset{
+			Name:     seed.name,
+			Role:     "code-writer",
+			Version:  1,
+			Status:   seed.status,
+			Contract: AgentContract{Name: seed.name, Spec: AgentSpec{Role: "code-writer"}},
+		}); err != nil {
+			t.Fatalf("seed agent %s: %v", seed.name, err)
+		}
+	}
+	for _, seed := range []struct {
+		name   string
+		status string
+	}{
+		{name: "go-cli-tdd", status: AssetStatusActive},
+		{name: "needs-review-tdd", status: AssetStatusNeedsReview},
+		{name: "deprecated-tdd", status: AssetStatusDeprecated},
+		{name: "archived-tdd", status: AssetStatusArchived},
+		{name: "superseded-tdd", status: AssetStatusSuperseded},
+	} {
+		if err := registry.UpsertSkill(SkillAsset{
+			Name:     seed.name,
+			Version:  1,
+			Status:   seed.status,
+			Contract: SkillContract{Name: seed.name},
+		}); err != nil {
+			t.Fatalf("seed skill %s: %v", seed.name, err)
+		}
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("recommend_assets", map[string]any{"request": "build a Go CLI with tests"})
+	if err != nil {
+		t.Fatalf("recommend_assets failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "recommend_assets" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["request"] != "build a Go CLI with tests" {
+		t.Fatalf("request was not echoed: %#v", result["request"])
+	}
+	agents := result["agents"].([]AgentAsset)
+	skills := result["skills"].([]SkillAsset)
+	if got := agentAssetNames(agents); !equalStrings(got, []string{"GoCliImplementer"}) {
+		t.Fatalf("agents = %#v, want seeded agent", agents)
+	}
+	if got := skillAssetNames(skills); !equalStrings(got, []string{"go-cli-tdd"}) {
+		t.Fatalf("skills = %#v, want seeded skill", skills)
+	}
+}
+
+func TestToolRecordOutcomeUpdatesAssetMetrics(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	skill := SkillAsset{
+		Name:     "go-cli-tdd",
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: SkillContract{Name: "go-cli-tdd"},
+	}
+	if err := registry.UpsertSkill(skill); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list seeded skills: %v", err)
+	}
+
+	result, err := NewTool(Options{DataDir: dataDir}).Handle("record_outcome", map[string]any{
+		"assetId": skills[0].ID,
+		"kind":    AssetKindSkill,
+		"status":  "error",
+		"runId":   "run_test",
+		"error":   "missing assertion",
+		"lesson":  "Add a focused regression test before reusing this skill.",
+	})
+	if err != nil {
+		t.Fatalf("record_outcome failed: %v", err)
+	}
+
+	if result["ok"] != true || result["action"] != "record_outcome" {
+		t.Fatalf("unexpected result metadata: %#v", result)
+	}
+	if result["assetId"] != skills[0].ID || result["kind"] != AssetKindSkill || result["status"] != "error" {
+		t.Fatalf("unexpected outcome echo: %#v", result)
+	}
+	updated, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list updated skills: %v", err)
+	}
+	if updated[0].Metrics.TotalRuns != 1 || updated[0].Metrics.FailureRuns != 1 || updated[0].Metrics.LastError != "missing assertion" {
+		t.Fatalf("metrics were not updated: %#v", updated[0].Metrics)
+	}
+	if len(updated[0].Lessons) != 1 || updated[0].Lessons[0].RunID != "run_test" {
+		t.Fatalf("lesson was not recorded: %#v", updated[0].Lessons)
+	}
+}
+
+func TestToolRecordOutcomeRejectsInvalidKindAndStatus(t *testing.T) {
+	dataDir := t.TempDir()
+	registry := NewAssetRegistry(dataDir)
+	if err := registry.UpsertSkill(SkillAsset{
+		Name:     "go-cli-tdd",
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: SkillContract{Name: "go-cli-tdd"},
+	}); err != nil {
+		t.Fatalf("seed skill: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list seeded skills: %v", err)
+	}
+	tool := NewTool(Options{DataDir: dataDir})
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "invalid kind",
+			args: map[string]any{"assetId": skills[0].ID, "kind": "workflow", "status": "success"},
+			want: "kind",
+		},
+		{
+			name: "invalid status",
+			args: map[string]any{"assetId": skills[0].ID, "kind": AssetKindSkill, "status": "skipped"},
+			want: "status",
+		},
+		{
+			name: "nil params",
+			args: nil,
+			want: "assetId",
+		},
+		{
+			name: "missing assetId",
+			args: map[string]any{"kind": AssetKindSkill, "status": "success"},
+			want: "assetId",
+		},
+		{
+			name: "missing kind",
+			args: map[string]any{"assetId": skills[0].ID, "status": "success"},
+			want: "kind",
+		},
+		{
+			name: "missing status",
+			args: map[string]any{"assetId": skills[0].ID, "kind": AssetKindSkill},
+			want: "status",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tool.RecordOutcome(tc.args)
+			if err == nil {
+				t.Fatal("expected RecordOutcome to reject invalid args")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func assertWorkflowTasksReferenceAssets(t *testing.T, workflow WorkflowPackage) {
 	t.Helper()
 	agentIDs := map[string]bool{}
@@ -421,6 +633,22 @@ func assertWorkflowTasksReferenceAssets(t *testing.T, workflow WorkflowPackage) 
 			}
 		}
 	}
+}
+
+func agentAssetNames(agents []AgentAsset) []string {
+	names := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		names = append(names, agent.Name)
+	}
+	return names
+}
+
+func skillAssetNames(skills []SkillAsset) []string {
+	names := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		names = append(names, skill.Name)
+	}
+	return names
 }
 
 func TestToolUsesConfiguredAnalyzer(t *testing.T) {
