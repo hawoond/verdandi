@@ -112,3 +112,173 @@ func TestEmptyAssetMetricsOmitsLastUsedAt(t *testing.T) {
 		t.Fatalf("lastUsedAt should be omitted from empty metrics JSON: %s", encoded)
 	}
 }
+
+func TestAssetRegistryPersistsAgentsAndSkills(t *testing.T) {
+	registry := NewAssetRegistry(t.TempDir())
+	now := time.Date(2026, 5, 9, 11, 0, 0, 0, time.UTC)
+
+	agent := AgentAsset{
+		Name:    "GoCliImplementer",
+		Role:    "code-writer",
+		Version: 1,
+		Status:  AssetStatusActive,
+		Contract: AgentContract{
+			Name:        "GoCliImplementer",
+			Description: "Implements Go CLI features for a coding agent handoff.",
+			Command:     "codex",
+			Spec: AgentSpec{
+				Role:         "code-writer",
+				Capabilities: []string{"go", "cli", "tdd"},
+			},
+			Inputs: map[string]string{"request": "계산기 CLI"},
+		},
+		Lineage: AssetLineage{CreatedAt: now, UpdatedAt: now},
+	}
+	skill := SkillAsset{
+		Name:    "go-cli-tdd",
+		Version: 1,
+		Status:  AssetStatusActive,
+		Contract: SkillContract{
+			Name:         "go-cli-tdd",
+			Description:  "Guide Go CLI implementation with tests first.",
+			WhenToUse:    "Use for Go command-line tools.",
+			Instructions: "Write failing tests before implementation.",
+			Inputs:       []string{"request", "acceptanceCriteria"},
+			Outputs:      []string{"patch", "testResults"},
+			Constraints:  []string{"Do not generate code inside Verdandi."},
+		},
+		Lineage: AssetLineage{CreatedAt: now, UpdatedAt: now},
+	}
+
+	if err := registry.UpsertAgent(agent); err != nil {
+		t.Fatalf("UpsertAgent returned error: %v", err)
+	}
+	if err := registry.UpsertSkill(skill); err != nil {
+		t.Fatalf("UpsertSkill returned error: %v", err)
+	}
+
+	loadedAgents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents returned error: %v", err)
+	}
+	loadedSkills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("ListSkills returned error: %v", err)
+	}
+	if len(loadedAgents) != 1 || loadedAgents[0].ID == "" {
+		t.Fatalf("expected one persisted agent with ID, got %#v", loadedAgents)
+	}
+	if len(loadedSkills) != 1 || loadedSkills[0].ID == "" {
+		t.Fatalf("expected one persisted skill with ID, got %#v", loadedSkills)
+	}
+}
+
+func TestAssetRegistryCreatesNewVersionInsteadOfDeleting(t *testing.T) {
+	registry := NewAssetRegistry(t.TempDir())
+	first := AgentAsset{
+		Name:     "GoCliImplementer",
+		Role:     "code-writer",
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: AgentContract{Name: "GoCliImplementer", Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"go", "cli"}}},
+	}
+	second := first
+	second.Contract.Spec.Capabilities = []string{"go", "cli", "tdd"}
+
+	savedFirst, err := registry.SaveAgentVersion(first, "")
+	if err != nil {
+		t.Fatalf("SaveAgentVersion first returned error: %v", err)
+	}
+	savedSecond, err := registry.SaveAgentVersion(second, savedFirst.ID)
+	if err != nil {
+		t.Fatalf("SaveAgentVersion second returned error: %v", err)
+	}
+
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents returned error: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("expected two versions to remain, got %d: %#v", len(agents), agents)
+	}
+	if savedSecond.Version != 2 {
+		t.Fatalf("second Version = %d, want 2", savedSecond.Version)
+	}
+	if agents[0].Status == "" || agents[1].Status == "" {
+		t.Fatalf("all agents should keep explicit lifecycle status: %#v", agents)
+	}
+	agentsByID := map[string]AgentAsset{}
+	for _, agent := range agents {
+		agentsByID[agent.ID] = agent
+	}
+	if agentsByID[savedFirst.ID].Status != AssetStatusSuperseded {
+		t.Fatalf("parent Status = %q, want %q", agentsByID[savedFirst.ID].Status, AssetStatusSuperseded)
+	}
+	if agentsByID[savedSecond.ID].Status != AssetStatusActive {
+		t.Fatalf("new version Status = %q, want %q", agentsByID[savedSecond.ID].Status, AssetStatusActive)
+	}
+	if agentsByID[savedSecond.ID].Lineage.ParentID != savedFirst.ID {
+		t.Fatalf("new version ParentID = %q, want %q", agentsByID[savedSecond.ID].Lineage.ParentID, savedFirst.ID)
+	}
+}
+
+func TestAssetRegistrySaveAgentVersionRecomputesIDFromSavedTemplate(t *testing.T) {
+	registry := NewAssetRegistry(t.TempDir())
+	first := AgentAsset{
+		Name:     "GoCliImplementer",
+		Role:     "code-writer",
+		Contract: AgentContract{Name: "GoCliImplementer", Spec: AgentSpec{Role: "code-writer"}},
+	}
+
+	savedFirst, err := registry.SaveAgentVersion(first, "")
+	if err != nil {
+		t.Fatalf("SaveAgentVersion first returned error: %v", err)
+	}
+	second := savedFirst
+	second.Contract.Spec.Capabilities = []string{"go", "cli", "tdd"}
+	savedSecond, err := registry.SaveAgentVersion(second, savedFirst.ID)
+	if err != nil {
+		t.Fatalf("SaveAgentVersion second returned error: %v", err)
+	}
+
+	if savedSecond.ID == savedFirst.ID {
+		t.Fatalf("second ID should not reuse first ID: %q", savedSecond.ID)
+	}
+	if savedSecond.ID != assetID(AssetKindAgent, "GoCliImplementer", 2) {
+		t.Fatalf("second ID = %q, want %q", savedSecond.ID, assetID(AssetKindAgent, "GoCliImplementer", 2))
+	}
+}
+
+func TestAssetRegistrySaveAgentVersionUsesContractNameForVersioning(t *testing.T) {
+	registry := NewAssetRegistry(t.TempDir())
+	first := AgentAsset{
+		Contract: AgentContract{Name: "GoCliImplementer", Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"go", "cli"}}},
+	}
+	second := AgentAsset{
+		Contract: AgentContract{Name: "GoCliImplementer", Spec: AgentSpec{Role: "code-writer", Capabilities: []string{"go", "cli", "tdd"}}},
+	}
+
+	savedFirst, err := registry.SaveAgentVersion(first, "")
+	if err != nil {
+		t.Fatalf("SaveAgentVersion first returned error: %v", err)
+	}
+	savedSecond, err := registry.SaveAgentVersion(second, savedFirst.ID)
+	if err != nil {
+		t.Fatalf("SaveAgentVersion second returned error: %v", err)
+	}
+
+	if savedSecond.Version != 2 {
+		t.Fatalf("second Version = %d, want 2", savedSecond.Version)
+	}
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents returned error: %v", err)
+	}
+	agentsByID := map[string]AgentAsset{}
+	for _, agent := range agents {
+		agentsByID[agent.ID] = agent
+	}
+	if agentsByID[savedFirst.ID].Status != AssetStatusSuperseded {
+		t.Fatalf("parent Status = %q, want %q", agentsByID[savedFirst.ID].Status, AssetStatusSuperseded)
+	}
+}
