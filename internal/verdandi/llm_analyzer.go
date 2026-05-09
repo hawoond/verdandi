@@ -31,6 +31,17 @@ type llmPlanResponse struct {
 	Keywords   []string         `json:"keywords"`
 	Complexity ComplexityResult `json:"complexity"`
 	Stages     []StageDef       `json:"stages"`
+	Agents     []llmAgentAsset  `json:"agents,omitempty"`
+	Skills     []SkillContract  `json:"skills,omitempty"`
+}
+
+type llmAgentAsset struct {
+	Name         string    `json:"name"`
+	Role         string    `json:"role"`
+	Capabilities []string  `json:"capabilities"`
+	Description  string    `json:"description"`
+	Command      string    `json:"command"`
+	Spec         AgentSpec `json:"spec"`
 }
 
 func NewLLMAnalyzer(config LLMAnalyzerConfig, fallback Analyzer) LLMAnalyzer {
@@ -140,15 +151,98 @@ func (a LLMAnalyzer) analyzeWithLLM(request string) (AnalysisResult, error) {
 			Confidence: clampConfidence(proposed.Confidence),
 			Keywords:   proposed.Keywords,
 		},
-		Complexity: proposed.Complexity,
-		Keywords:   keywordFrequencies(proposed.Keywords),
-		Plan:       plan,
-		Source:     AnalyzerLLM,
+		Complexity:     proposed.Complexity,
+		Keywords:       keywordFrequencies(proposed.Keywords),
+		Plan:           plan,
+		Source:         AnalyzerLLM,
+		WorkflowAssets: workflowAssetsFromLLMResponse(proposed),
 	}, nil
 }
 
 func llmAnalyzerSystemPrompt() string {
-	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages. Each stage may include an agent contract optimized for the request. If existingAgents contains a similar agent, consider its lifecycleRecommendation and metrics such as totalRuns, successRuns, failureRuns, successRate, lastStatus, and lastError, then include agentDecision.action as reuse-enhance, rewrite, or separate and explain the reason.`
+	return `Return only JSON. Choose intent from code-writer, documenter, researcher, data-analyst, planner, orchestrator, general. Choose stages only from planner, code-writer, tester, documenter, deployer. Include confidence from 0 to 1, keywords, complexity with level LOW/MEDIUM/HIGH and score 0-10, and stages. Verdandi does not write application code. The external coding LLM agent writes code. Return persistent reusable agent assets and skill assets that the coding agent should use. Top-level agents may use either {"name","role","capabilities","description"} or the agent contract shape {"name","description","command","spec":{"role","capabilities"}}. Top-level skills should use {"name","description","whenToUse","instructions","inputs","outputs","constraints"}. Existing agents may be reused, enhanced, superseded, or kept separate. Do not suggest deleting assets. Each stage may include an agent contract optimized for the request. If existingAgents contains a similar agent, consider its lifecycleRecommendation and metrics such as totalRuns, successRuns, failureRuns, successRate, lastStatus, and lastError, then include agentDecision.action as reuse-enhance, rewrite, or separate and explain the reason.`
+}
+
+func workflowAssetsFromLLMResponse(proposed llmPlanResponse) WorkflowAssets {
+	assets := WorkflowAssets{
+		Agents: make([]AgentAsset, 0, len(proposed.Agents)),
+		Skills: make([]SkillAsset, 0, len(proposed.Skills)),
+	}
+	for _, proposedAgent := range proposed.Agents {
+		agent := agentAssetFromLLM(proposedAgent)
+		if agent.Name == "" {
+			continue
+		}
+		assets.Agents = append(assets.Agents, agent)
+	}
+	for _, proposedSkill := range proposed.Skills {
+		skill := skillAssetFromLLM(proposedSkill)
+		if skill.Name == "" {
+			continue
+		}
+		assets.Skills = append(assets.Skills, skill)
+	}
+	return assets
+}
+
+func agentAssetFromLLM(proposed llmAgentAsset) AgentAsset {
+	name := strings.TrimSpace(proposed.Name)
+	role := strings.TrimSpace(proposed.Role)
+	if role == "" {
+		role = strings.TrimSpace(proposed.Spec.Role)
+	}
+	if role == "" {
+		role = "code-writer"
+	}
+	if name == "" {
+		name = agentName(role)
+	}
+	capabilities := proposed.Capabilities
+	if len(capabilities) == 0 {
+		capabilities = proposed.Spec.Capabilities
+	}
+	description := strings.TrimSpace(proposed.Description)
+	if description == "" {
+		description = "Reusable LLM-proposed agent asset for " + role + " work."
+	}
+	command := strings.TrimSpace(proposed.Command)
+	if command == "" {
+		command = "codex"
+	}
+	agent := AgentAsset{
+		Name:    name,
+		Role:    role,
+		Version: 1,
+		Status:  AssetStatusActive,
+		Contract: AgentContract{
+			Name:        name,
+			Description: description,
+			Command:     command,
+			Spec: AgentSpec{
+				Role:         role,
+				Capabilities: capabilities,
+			},
+			Metadata: map[string]any{
+				"source": "llm-analyzer",
+			},
+			Inputs: map[string]string{},
+		},
+	}
+	return normalizeAgentAsset(agent, "")
+}
+
+func skillAssetFromLLM(contract SkillContract) SkillAsset {
+	contract.Name = strings.TrimSpace(contract.Name)
+	if contract.Name == "" {
+		return SkillAsset{}
+	}
+	skill := SkillAsset{
+		Name:     contract.Name,
+		Version:  1,
+		Status:   AssetStatusActive,
+		Contract: contract,
+	}
+	return normalizeSkillAsset(skill, "")
 }
 
 func (a LLMAnalyzer) llmUserContent(request string) string {
