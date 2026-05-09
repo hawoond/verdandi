@@ -63,6 +63,121 @@ func TestToolRunRejectsEmptyRequest(t *testing.T) {
 	}
 }
 
+func TestRunPreparesWorkflowInsteadOfGeneratingAppCode(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+
+	result, err := tool.Run("계산기 앱을 기획하고 구현하고 테스트해줘")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	if result["action"] != "run" {
+		t.Fatalf("expected run compatibility action, got %#v", result["action"])
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", result["status"])
+	}
+	outputDir := result["outputDir"].(string)
+	for _, name := range []string{"workflow.json", "handoff.md", "selected-assets.json"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+			t.Fatalf("expected workflow package file %s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "main.go")); !os.IsNotExist(err) {
+		t.Fatalf("run must not generate application source main.go, stat err = %v", err)
+	}
+	handoff, err := os.ReadFile(filepath.Join(outputDir, "handoff.md"))
+	if err != nil {
+		t.Fatalf("read handoff: %v", err)
+	}
+	if !strings.Contains(string(handoff), "Verdandi does not write application code") {
+		t.Fatalf("handoff should describe workflow preparation boundary: %s", string(handoff))
+	}
+	events, err := tool.ListEvents(result["runId"].(string))
+	if err != nil {
+		t.Fatalf("prepared run should write events: %v", err)
+	}
+	seenEvents := map[string]bool{}
+	for _, event := range events["events"].([]VisualizationEvent) {
+		seenEvents[event.Type] = true
+	}
+	for _, eventType := range []string{EventRunStarted, EventStageStarted, EventStageCompleted, EventRunCompleted} {
+		if !seenEvents[eventType] {
+			t.Fatalf("prepared run events missing %q in %#v", eventType, seenEvents)
+		}
+	}
+}
+
+func TestRunWithProgressReportsWorkflowPreparation(t *testing.T) {
+	dataDir := t.TempDir()
+	tool := NewTool(Options{DataDir: dataDir})
+	progress := []ProgressEvent{}
+
+	if _, err := tool.RunWithProgress("계산기 앱을 기획하고 구현하고 테스트해줘", func(event ProgressEvent) {
+		progress = append(progress, event)
+	}); err != nil {
+		t.Fatalf("run with progress failed: %v", err)
+	}
+
+	if len(progress) != 2 {
+		t.Fatalf("expected two progress events, got %#v", progress)
+	}
+	if progress[0].Progress != 0 || progress[0].Total != 1 || !strings.Contains(progress[0].Message, "started") {
+		t.Fatalf("unexpected start progress: %#v", progress[0])
+	}
+	if progress[1].Progress != 1 || progress[1].Total != 1 || !strings.Contains(progress[1].Message, "completed") {
+		t.Fatalf("unexpected completion progress: %#v", progress[1])
+	}
+}
+
+func TestRunOptionsRewritePreparedWorkflowAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "계산기 앱을 구현하고 테스트해줘"
+	plan, err := NewOrchestrator(dataDir).NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent: IntentResult{Category: IntentCodeWriter, Confidence: 0.9},
+			Plan:   plan,
+			Source: AnalyzerKeyword,
+		},
+	})
+
+	first, err := tool.Run(request)
+	if err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	second, err := tool.Run(request, map[string]any{"agentPolicy": AgentPolicyRewrite})
+	if err != nil {
+		t.Fatalf("rewrite run failed: %v", err)
+	}
+
+	firstWorkflow := first["workflow"].(WorkflowPackage)
+	secondWorkflow := second["workflow"].(WorkflowPackage)
+	if firstWorkflow.Agents[0].ID == secondWorkflow.Agents[0].ID {
+		t.Fatalf("rewrite policy should create a new prepared agent version, got %q", secondWorkflow.Agents[0].ID)
+	}
+	agents, err := NewAssetRegistry(dataDir).ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	byID := map[string]AgentAsset{}
+	for _, agent := range agents {
+		byID[agent.ID] = agent
+	}
+	if byID[firstWorkflow.Agents[0].ID].Status != AssetStatusSuperseded {
+		t.Fatalf("first agent status = %q, want superseded", byID[firstWorkflow.Agents[0].ID].Status)
+	}
+	if byID[secondWorkflow.Agents[0].ID].Status != AssetStatusActive {
+		t.Fatalf("second agent status = %q, want active", byID[secondWorkflow.Agents[0].ID].Status)
+	}
+}
+
 func TestToolRunPlanExecutesClientSelectedStagesWithoutAnalyzer(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{err: errors.New("analyzer should not be called")})
@@ -686,8 +801,8 @@ func TestToolStoresStatusAndListsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status failed: %v", err)
 	}
-	if status["status"] != "success" {
-		t.Fatalf("expected success status, got %#v", status["status"])
+	if status["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", status["status"])
 	}
 
 	opened, err := tool.OpenOutput(runID)
@@ -715,10 +830,7 @@ func TestToolRunWritesSpinningWheelEvents(t *testing.T) {
 		},
 	}))
 
-	result, err := tool.Run("시각화 이벤트 테스트")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	result := runAnalyzerPlanLegacyForTest(t, tool, "시각화 이벤트 테스트")
 
 	runID := result["runId"].(string)
 	eventsPath := filepath.Join(dataDir, "events", runID+".jsonl")
@@ -779,10 +891,7 @@ func TestToolRunWritesUpdatedMetricsEvent(t *testing.T) {
 		},
 	}))
 
-	result, err := tool.Run("metrics 이벤트 테스트")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	result := runAnalyzerPlanLegacyForTest(t, tool, "metrics 이벤트 테스트")
 
 	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
 	if err != nil {
@@ -806,9 +915,10 @@ func TestToolRunWritesFallbackSpinningWheelAgentsForKeywordStages(t *testing.T) 
 	dataDir := t.TempDir()
 	tool := NewTool(Options{DataDir: dataDir})
 
-	result, err := tool.Run("기획 구현 테스트 문서화")
+	plan := tool.orchestrator.ParseRequest("기획 구현 테스트 문서화")
+	result, err := tool.RunPlan("기획 구현 테스트 문서화", plan.Stages)
 	if err != nil {
-		t.Fatalf("run failed: %v", err)
+		t.Fatalf("run_plan failed: %v", err)
 	}
 
 	events, err := NewEventStoreForDataDir(dataDir).List(result["runId"].(string))
@@ -902,8 +1012,8 @@ func TestToolRunUsesAnalyzerPlan(t *testing.T) {
 		t.Fatalf("status failed: %v", err)
 	}
 	stages := status["stages"].([]StageResult)
-	if len(stages) != 1 || stages[0].Stage != "documenter" {
-		t.Fatalf("expected documenter-only run, got %#v", stages)
+	if len(stages) != 1 || stages[0].Stage != "01-documenter" || stages[0].Status != "prepared" {
+		t.Fatalf("expected prepared documenter-only workflow, got %#v", stages)
 	}
 	if status["analyzer"] != AnalyzerLLM {
 		t.Fatalf("expected analyzer in status, got %#v", status["analyzer"])
@@ -991,16 +1101,9 @@ func TestToolAnalyzeAndRunExposeDynamicAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	status, err := tool.GetStatus(run["runId"].(string))
-	if err != nil {
-		t.Fatalf("status failed: %v", err)
-	}
-	stages := status["stages"].([]StageResult)
-	if stages[0].Stage != "code-writer" || stages[0].Result == nil {
-		t.Fatalf("expected code writer execution, got %#v", stages)
-	}
-	if stages[0].Agent == nil || stages[0].Agent.Name != "AccessibilityFocusedFrontendAgent" {
-		t.Fatalf("expected selected dynamic agent in stage result, got %#v", stages[0].Agent)
+	workflow := run["workflow"].(WorkflowPackage)
+	if len(workflow.Agents) == 0 || workflow.Agents[0].Name != "AccessibilityFocusedFrontendAgent" {
+		t.Fatalf("expected dynamic agent asset in workflow, got %#v", workflow.Agents)
 	}
 }
 
@@ -1014,9 +1117,7 @@ func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
 			Capabilities: []string{"accessibility", "semantic-html"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 접근성 UI 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 접근성 UI 에이전트 생성")
 
 	secondTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "접근성 좋은 대시보드 구현", AgentContract{
 		Name:        "DashboardAccessibilityAgent",
@@ -1026,10 +1127,7 @@ func TestToolRunReusesAndEnhancesSimilarAgentByDefault(t *testing.T) {
 			Capabilities: []string{"accessibility", "dashboard-ui"},
 		},
 	}))
-	run, err := secondTool.Run("접근성 좋은 대시보드 구현")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, secondTool, "접근성 좋은 대시보드 구현")
 
 	status, err := secondTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -1060,9 +1158,7 @@ func TestToolRunCanRewriteSimilarAgent(t *testing.T) {
 			Capabilities: []string{"documentation", "readme"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 문서 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 문서 에이전트 생성")
 
 	rewriteTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "문서 에이전트를 새 기준으로 재작성", AgentContract{
 		Name:        "ModernDocumentationAgent",
@@ -1072,10 +1168,7 @@ func TestToolRunCanRewriteSimilarAgent(t *testing.T) {
 			Capabilities: []string{"documentation", "product-guide"},
 		},
 	}))
-	run, err := rewriteTool.Run("문서 에이전트를 새 기준으로 재작성", map[string]any{"agentPolicy": AgentPolicyRewrite})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, rewriteTool, "문서 에이전트를 새 기준으로 재작성", map[string]any{"agentPolicy": AgentPolicyRewrite})
 
 	status, err := rewriteTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -1103,9 +1196,7 @@ func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
 			Capabilities: []string{"data-analysis", "reporting"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 분석 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 분석 에이전트 생성")
 
 	separateTool := NewToolWithAnalyzer(Options{DataDir: dataDir}, analyzerForAgentPlan(t, dataDir, "별도 실험 분석 에이전트 생성", AgentContract{
 		Name:        "ExperimentAnalysisAgent",
@@ -1115,10 +1206,7 @@ func TestToolRunCanSeparateSimilarAgent(t *testing.T) {
 			Capabilities: []string{"data-analysis", "experimentation"},
 		},
 	}))
-	run, err := separateTool.Run("별도 실험 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, separateTool, "별도 실험 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
 
 	status, err := separateTool.GetStatus(run["runId"].(string))
 	if err != nil {
@@ -1146,9 +1234,7 @@ func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
 			Capabilities: []string{"accessibility", "semantic-html"},
 		},
 	}))
-	if _, err := firstTool.Run("기존 접근성 에이전트 생성"); err != nil {
-		t.Fatalf("initial run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, firstTool, "기존 접근성 에이전트 생성")
 
 	orchestrator := NewOrchestrator(dataDir)
 	plan, err := orchestrator.NormalizePlan("접근성 에이전트 재작성", []StageDef{{
@@ -1178,10 +1264,7 @@ func TestToolRunHonorsAnalyzerAgentLifecycleDecision(t *testing.T) {
 		Source:     AnalyzerLLM,
 	}})
 
-	run, err := tool.Run("접근성 에이전트 재작성")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "접근성 에이전트 재작성")
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -1210,9 +1293,7 @@ func TestToolListAgentsReturnsPersistedContracts(t *testing.T) {
 			Capabilities: []string{"accessibility"},
 		},
 	}))
-	if _, err := tool.Run("접근성 UI 에이전트 생성"); err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, tool, "접근성 UI 에이전트 생성")
 
 	listed, err := tool.ListAgents()
 	if err != nil {
@@ -1236,9 +1317,7 @@ func TestToolRecordsSuccessfulAgentPerformance(t *testing.T) {
 			Capabilities: []string{"accessibility"},
 		},
 	}))
-	if _, err := tool.Run("성공하는 접근성 UI 에이전트"); err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	runAnalyzerPlanLegacyForTest(t, tool, "성공하는 접근성 UI 에이전트")
 
 	listed, err := tool.ListAgents()
 	if err != nil {
@@ -1281,10 +1360,7 @@ func TestToolRecordsFailedAgentPerformance(t *testing.T) {
 		Source:     AnalyzerLLM,
 	}})
 
-	run, err := tool.Run("테스트만 실행")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "테스트만 실행")
 	if run["status"] != "error" {
 		t.Fatalf("expected failed run status, got %#v", run)
 	}
@@ -1384,10 +1460,7 @@ func TestToolRunAppliesLifecycleRecommendationWhenPolicyIsImplicit(t *testing.T)
 			Capabilities: []string{"accessibility", "ui-implementation", "design-system"},
 		},
 	}))
-	run, err := tool.Run("접근성 UI 에이전트 재구성")
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "접근성 UI 에이전트 재구성")
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -1433,10 +1506,7 @@ func TestToolRunOptionsOverrideLifecycleRecommendation(t *testing.T) {
 			Capabilities: []string{"data-analysis", "experimentation"},
 		},
 	}))
-	run, err := tool.Run("별도 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
+	run := runAnalyzerPlanLegacyForTest(t, tool, "별도 분석 에이전트 생성", map[string]any{"agentPolicy": AgentPolicySeparate})
 	status, err := tool.GetStatus(run["runId"].(string))
 	if err != nil {
 		t.Fatalf("status failed: %v", err)
@@ -1486,8 +1556,12 @@ func TestToolRefreshesLLMAgentContextBetweenRequests(t *testing.T) {
 			Model:    "test-model",
 		},
 	})
-	if _, err := tool.Run("접근성 에이전트 생성"); err != nil {
-		t.Fatalf("run failed: %v", err)
+	analysis, err := tool.analyzeRequest("접근성 에이전트 생성")
+	if err != nil {
+		t.Fatalf("analyze failed: %v", err)
+	}
+	if _, err := tool.RunPlan("접근성 에이전트 생성", analysis.Plan.Stages); err != nil {
+		t.Fatalf("run_plan failed: %v", err)
 	}
 	if _, err := tool.Analyze("저장된 에이전트 참고해서 분석"); err != nil {
 		t.Fatalf("analyze failed: %v", err)
@@ -1526,6 +1600,19 @@ func analyzerForAgentPlan(t *testing.T, dataDir string, request string, agent Ag
 			Source:     AnalyzerLLM,
 		},
 	}
+}
+
+func runAnalyzerPlanLegacyForTest(t *testing.T, tool Tool, request string, options ...map[string]any) map[string]any {
+	t.Helper()
+	analysis, err := tool.analyzer.Analyze(request)
+	if err != nil {
+		t.Fatalf("analyze test plan failed: %v", err)
+	}
+	result, err := tool.RunPlan(request, analysis.Plan.Stages, options...)
+	if err != nil {
+		t.Fatalf("run_plan failed: %v", err)
+	}
+	return result
 }
 
 func containsString(values []string, expected string) bool {

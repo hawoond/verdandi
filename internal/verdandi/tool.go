@@ -118,22 +118,14 @@ func (t Tool) RunWithProgress(request string, reporter ProgressReporter, options
 }
 
 func (t Tool) RunContext(ctx context.Context, request string, reporter ProgressReporter, options ...map[string]any) (map[string]any, error) {
-	if strings.TrimSpace(request) == "" {
-		return nil, fmt.Errorf("request 문자열이 필요합니다")
-	}
-	runOptions := map[string]any{}
-	if len(options) > 0 && options[0] != nil {
-		runOptions = options[0]
-	}
-	analysis, err := t.analyzeRequest(request)
+	reportProgress(reporter, 0, 1, "prepare_workflow started")
+	result, err := t.PrepareWorkflow(request, options...)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := t.agents.ResolvePlan(analysis.Plan, runOptions)
-	if err != nil {
-		return nil, err
-	}
-	return t.executePlan(ctx, request, plan, runOptions, analysis.Source, analysis.FallbackReason, "run", reporter)
+	result["action"] = "run"
+	reportProgress(reporter, 1, 1, "prepare_workflow completed")
+	return result, nil
 }
 
 func (t Tool) RunPlan(request string, stages []StageDef, options ...map[string]any) (map[string]any, error) {
@@ -185,6 +177,10 @@ func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[st
 	if strings.TrimSpace(request) == "" {
 		return nil, fmt.Errorf("request 문자열이 필요합니다")
 	}
+	runOptions := map[string]any{}
+	if len(options) > 0 && options[0] != nil {
+		runOptions = options[0]
+	}
 
 	analysis, err := t.analyzeRequest(request)
 	if err != nil {
@@ -200,12 +196,11 @@ func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[st
 	}
 	for index, agent := range pkg.Agents {
 		originalID := agent.ID
-		selected, found := findReusableAgentAsset(existingAgents, agent)
-		if !found {
-			selected, err = t.assets.SaveAgentVersion(agent, "")
-			if err != nil {
-				return nil, err
-			}
+		selected, err := t.selectPreparedAgentAsset(existingAgents, agent, runOptions)
+		if err != nil {
+			return nil, err
+		}
+		if !containsAgentAssetID(existingAgents, selected.ID) {
 			existingAgents = append(existingAgents, selected)
 		}
 		pkg.Agents[index] = selected
@@ -243,6 +238,9 @@ func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[st
 		CompletedAt:    completedAt,
 	}
 	if err := t.store.Save(record); err != nil {
+		return nil, err
+	}
+	if err := t.events.SaveRun(record); err != nil {
 		return nil, err
 	}
 
@@ -657,6 +655,62 @@ func findReusableAgentAsset(existing []AgentAsset, candidate AgentAsset) (AgentA
 		return agent, true
 	}
 	return AgentAsset{}, false
+}
+
+func (t Tool) selectPreparedAgentAsset(existing []AgentAsset, candidate AgentAsset, options map[string]any) (AgentAsset, error) {
+	active, found := findReusableAgentAsset(existing, candidate)
+	policy, hasPolicy := explicitAgentPolicy(options)
+	if !hasPolicy {
+		if found {
+			return active, nil
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	}
+	switch policy {
+	case AgentPolicyReuseEnhance:
+		if found {
+			return active, nil
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	case AgentPolicyRewrite:
+		if found {
+			return t.assets.SaveAgentVersion(candidate, active.ID)
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	case AgentPolicySeparate:
+		if found {
+			candidate.Name = uniqueSeparateAssetName(candidate.Name, existing)
+			candidate.ID = ""
+		}
+		return t.assets.SaveAgentVersion(candidate, "")
+	default:
+		return AgentAsset{}, fmt.Errorf("unknown agent policy: %s", policy)
+	}
+}
+
+func containsAgentAssetID(agents []AgentAsset, id string) bool {
+	for _, agent := range agents {
+		if agent.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueSeparateAssetName(base string, existing []AgentAsset) string {
+	if strings.TrimSpace(base) == "" {
+		base = "SeparateAgent"
+	}
+	names := map[string]bool{}
+	for _, agent := range existing {
+		names[strings.ToLower(agent.Name)] = true
+	}
+	for index := 2; ; index++ {
+		candidate := fmt.Sprintf("%sSeparate%d", base, index)
+		if !names[strings.ToLower(candidate)] {
+			return candidate
+		}
+	}
 }
 
 func replaceWorkflowAgentID(pkg *WorkflowPackage, oldID string, newID string) {
