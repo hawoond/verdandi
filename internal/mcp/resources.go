@@ -42,6 +42,20 @@ func defaultResources() []Resource {
 			Description: "List persisted agent contracts and lifecycle recommendations.",
 			MimeType:    "application/json",
 		},
+		{
+			URI:         "verdandi://assets",
+			Name:        "assets",
+			Title:       "Verdandi Assets",
+			Description: "List persisted agent and skill assets.",
+			MimeType:    "application/json",
+		},
+		{
+			URI:         "verdandi://skills",
+			Name:        "skills",
+			Title:       "Verdandi Skills",
+			Description: "List persisted skill assets.",
+			MimeType:    "application/json",
+		},
 	}
 }
 
@@ -77,6 +91,20 @@ func defaultResourceTemplates() []ResourceTemplate {
 			Description: "Read generated output file metadata for a Verdandi run.",
 			MimeType:    "application/json",
 		},
+		{
+			URITemplate: "verdandi://workflows/{runId}",
+			Name:        "workflow",
+			Title:       "Verdandi Workflow",
+			Description: "Read a prepared workflow package by runId.",
+			MimeType:    "application/json",
+		},
+		{
+			URITemplate: "verdandi://workflows/{runId}/handoff",
+			Name:        "workflow-handoff",
+			Title:       "Verdandi Workflow Handoff",
+			Description: "Read the Markdown handoff prompt for a prepared workflow.",
+			MimeType:    "text/markdown",
+		},
 	}
 }
 
@@ -97,13 +125,14 @@ func (s *Server) readResource(params json.RawMessage) (map[string]any, error) {
 	if err != nil {
 		return nil, resourceNotFound(payload.URI)
 	}
+	mimeType, text := resourceContent(payload.URI, structured)
 
 	return map[string]any{
 		"contents": []map[string]any{
 			{
 				"uri":      payload.URI,
-				"mimeType": "application/json",
-				"text":     marshalResourceText(structured),
+				"mimeType": mimeType,
+				"text":     text,
 			},
 		},
 	}, nil
@@ -115,6 +144,23 @@ func resourceAction(uri string) (string, map[string]any, bool) {
 		return "list_runs", map[string]any{}, true
 	case "verdandi://agents":
 		return "list_agents", map[string]any{}, true
+	case "verdandi://assets":
+		return "list_assets", map[string]any{}, true
+	case "verdandi://skills":
+		return "list_skills", map[string]any{}, true
+	}
+
+	const workflowPrefix = "verdandi://workflows/"
+	if strings.HasPrefix(uri, workflowPrefix) {
+		rest := strings.TrimPrefix(uri, workflowPrefix)
+		parts := strings.Split(rest, "/")
+		if len(parts) == 1 && parts[0] != "" {
+			return "get_workflow", map[string]any{"runId": parts[0]}, true
+		}
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "handoff" {
+			return "get_workflow_handoff", map[string]any{"runId": parts[0]}, true
+		}
+		return "", nil, false
 	}
 
 	const prefix = "verdandi://runs/"
@@ -154,4 +200,13 @@ func marshalResourceText(value any) string {
 		return fmt.Sprintf("%v", value)
 	}
 	return string(encoded)
+}
+
+func resourceContent(uri string, structured map[string]any) (string, string) {
+	if strings.HasSuffix(uri, "/handoff") {
+		if handoff, ok := structured["handoff"].(string); ok {
+			return "text/markdown", handoff
+		}
+	}
+	return "application/json", marshalResourceText(structured)
 }

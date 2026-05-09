@@ -454,6 +454,25 @@ func (t Tool) ListSkills() (map[string]any, error) {
 	}, nil
 }
 
+func (t Tool) ListAssets() (map[string]any, error) {
+	agents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := t.assets.ListSkills()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "list_assets",
+		"agents":  agents,
+		"skills":  skills,
+		"counts":  map[string]int{"agents": len(agents), "skills": len(skills)},
+		"options": agentPolicyOptions(),
+	}, nil
+}
+
 func (t Tool) RecommendAssets(request string) (map[string]any, error) {
 	agents, err := t.assets.ListAgents()
 	if err != nil {
@@ -517,6 +536,58 @@ func (t Tool) RecordOutcome(args map[string]any) (map[string]any, error) {
 		"kind":    kind,
 		"status":  status,
 	}, nil
+}
+
+func (t Tool) GetWorkflow(runID string) (map[string]any, error) {
+	record, err := t.workflowRunRecord(runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(record.OutputDir, "workflow.json"))
+	if err != nil {
+		return nil, err
+	}
+	var workflow any
+	if err := json.Unmarshal(data, &workflow); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":       true,
+		"action":   "get_workflow",
+		"runId":    record.RunID,
+		"workflow": workflow,
+	}, nil
+}
+
+func (t Tool) GetWorkflowHandoff(runID string) (map[string]any, error) {
+	record, err := t.workflowRunRecord(runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(record.OutputDir, "handoff.md"))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"ok":      true,
+		"action":  "get_workflow_handoff",
+		"runId":   record.RunID,
+		"handoff": string(data),
+	}, nil
+}
+
+func (t Tool) workflowRunRecord(runID string) (RunRecord, error) {
+	if strings.TrimSpace(runID) == "" {
+		return RunRecord{}, fmt.Errorf("runId 문자열이 필요합니다")
+	}
+	record, err := t.store.Find(runID)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	if strings.TrimSpace(record.OutputDir) == "" {
+		return RunRecord{}, fmt.Errorf("workflow 출력 디렉토리가 없습니다")
+	}
+	return record, nil
 }
 
 func (t Tool) ListRuns() (map[string]any, error) {
@@ -628,8 +699,14 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 		return t.ListEvents(requiredString(params, "runId"))
 	case "list_agents":
 		return t.ListAgents()
+	case "list_assets":
+		return t.ListAssets()
 	case "list_skills":
 		return t.ListSkills()
+	case "get_workflow":
+		return t.GetWorkflow(requiredString(params, "runId"))
+	case "get_workflow_handoff":
+		return t.GetWorkflowHandoff(requiredString(params, "runId"))
 	case "open_output":
 		return t.OpenOutput(requiredString(params, "runId"))
 	default:

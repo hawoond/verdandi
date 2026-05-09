@@ -455,7 +455,7 @@ func TestResourcesListExposesVerdandiStateResources(t *testing.T) {
 		}
 	}
 
-	for _, uri := range []string{"verdandi://runs", "verdandi://agents"} {
+	for _, uri := range []string{"verdandi://runs", "verdandi://agents", "verdandi://assets", "verdandi://skills"} {
 		if !uris[uri] {
 			t.Fatalf("missing resource %q in %#v", uri, uris)
 		}
@@ -463,38 +463,31 @@ func TestResourcesListExposesVerdandiStateResources(t *testing.T) {
 }
 
 func TestResourcesListSupportsCursorPagination(t *testing.T) {
-	input := `{"jsonrpc":"2.0","id":"resources","method":"resources/list","params":{"cursor":"0"}}` + "\n"
-	var output bytes.Buffer
-
 	server := NewServer(&fakeExecutor{})
-	if err := server.Serve(strings.NewReader(input), &output); err != nil {
-		t.Fatalf("serve: %v", err)
-	}
+	cursor := "0"
+	seen := 0
+	for {
+		input := fmt.Sprintf(`{"jsonrpc":"2.0","id":"resources-%s","method":"resources/list","params":{"cursor":%q}}`+"\n", cursor, cursor)
+		var output bytes.Buffer
+		if err := server.Serve(strings.NewReader(input), &output); err != nil {
+			t.Fatalf("serve cursor %s: %v", cursor, err)
+		}
 
-	responses := decodeResponses(t, output.String())
-	result := responses[0]["result"].(map[string]any)
-	resources := result["resources"].([]any)
-	if len(resources) != 1 {
-		t.Fatalf("expected first paginated resource only, got %#v", resources)
+		responses := decodeResponses(t, output.String())
+		result := responses[0]["result"].(map[string]any)
+		resources := result["resources"].([]any)
+		if len(resources) != 1 {
+			t.Fatalf("expected one paginated resource at cursor %s, got %#v", cursor, resources)
+		}
+		seen++
+		next, ok := result["nextCursor"].(string)
+		if !ok {
+			break
+		}
+		cursor = next
 	}
-	if result["nextCursor"] != "1" {
-		t.Fatalf("expected next cursor 1, got %#v", result)
-	}
-
-	input = `{"jsonrpc":"2.0","id":"resources-next","method":"resources/list","params":{"cursor":"1"}}` + "\n"
-	output.Reset()
-	if err := server.Serve(strings.NewReader(input), &output); err != nil {
-		t.Fatalf("serve next page: %v", err)
-	}
-
-	responses = decodeResponses(t, output.String())
-	result = responses[0]["result"].(map[string]any)
-	resources = result["resources"].([]any)
-	if len(resources) != 1 {
-		t.Fatalf("expected second paginated resource only, got %#v", resources)
-	}
-	if _, ok := result["nextCursor"]; ok {
-		t.Fatalf("did not expect next cursor on final page: %#v", result)
+	if seen != len(defaultResources()) {
+		t.Fatalf("visited %d paginated resources, want %d", seen, len(defaultResources()))
 	}
 }
 
@@ -516,9 +509,57 @@ func TestResourceTemplatesListExposesParameterizedVerdandiResources(t *testing.T
 		uris[template["uriTemplate"].(string)] = true
 	}
 
-	for _, uri := range []string{"verdandi://runs/{runId}", "verdandi://runs/{runId}/events", "verdandi://runs/{runId}/output"} {
+	for _, uri := range []string{
+		"verdandi://runs/{runId}",
+		"verdandi://runs/{runId}/events",
+		"verdandi://runs/{runId}/output",
+		"verdandi://workflows/{runId}",
+		"verdandi://workflows/{runId}/handoff",
+	} {
 		if !uris[uri] {
 			t.Fatalf("missing resource template %q in %#v", uri, uris)
+		}
+	}
+}
+
+func TestResourceActionRoutesAssetAndWorkflowResources(t *testing.T) {
+	tests := []struct {
+		uri    string
+		action string
+		args   map[string]any
+	}{
+		{
+			uri:    "verdandi://assets",
+			action: "list_assets",
+			args:   map[string]any{},
+		},
+		{
+			uri:    "verdandi://skills",
+			action: "list_skills",
+			args:   map[string]any{},
+		},
+		{
+			uri:    "verdandi://workflows/run_123",
+			action: "get_workflow",
+			args:   map[string]any{"runId": "run_123"},
+		},
+		{
+			uri:    "verdandi://workflows/run_123/handoff",
+			action: "get_workflow_handoff",
+			args:   map[string]any{"runId": "run_123"},
+		},
+	}
+
+	for _, tt := range tests {
+		action, args, ok := resourceAction(tt.uri)
+		if !ok {
+			t.Fatalf("resourceAction(%q) did not match", tt.uri)
+		}
+		if action != tt.action {
+			t.Fatalf("resourceAction(%q) action = %q, want %q", tt.uri, action, tt.action)
+		}
+		if fmt.Sprint(args) != fmt.Sprint(tt.args) {
+			t.Fatalf("resourceAction(%q) args = %#v, want %#v", tt.uri, args, tt.args)
 		}
 	}
 }
@@ -556,6 +597,57 @@ func TestResourcesReadReturnsStructuredVerdandiState(t *testing.T) {
 	}
 }
 
+func TestResourcesReadReturnsAssetsSkillsWorkflowAndHandoff(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "prepare workflow handoff resource"
+	runInput := `{"jsonrpc":"2.0","id":"run","method":"tools/call","params":{"name":"run","arguments":{"request":"` + request + `"}}}` + "\n"
+	var runOutput bytes.Buffer
+	server := NewServer(verdandi.NewExecutor(verdandi.Options{DataDir: dataDir}))
+	if err := server.Serve(strings.NewReader(runInput), &runOutput); err != nil {
+		t.Fatalf("run serve: %v", err)
+	}
+	runResponses := decodeResponses(t, runOutput.String())
+	runResult := runResponses[0]["result"].(map[string]any)
+	runID := runResult["structuredContent"].(map[string]any)["runId"].(string)
+
+	tests := []struct {
+		uri      string
+		mimeType string
+		contains string
+	}{
+		{
+			uri:      "verdandi://assets",
+			mimeType: "application/json",
+			contains: `"action": "list_assets"`,
+		},
+		{
+			uri:      "verdandi://skills",
+			mimeType: "application/json",
+			contains: `"action": "list_skills"`,
+		},
+		{
+			uri:      "verdandi://workflows/" + runID,
+			mimeType: "application/json",
+			contains: `"action": "get_workflow"`,
+		},
+		{
+			uri:      "verdandi://workflows/" + runID + "/handoff",
+			mimeType: "text/markdown",
+			contains: request,
+		},
+	}
+
+	for _, tt := range tests {
+		content := readResourceContent(t, server, tt.uri)
+		if content["mimeType"] != tt.mimeType {
+			t.Fatalf("%s mimeType = %#v, want %q", tt.uri, content["mimeType"], tt.mimeType)
+		}
+		if !strings.Contains(content["text"].(string), tt.contains) {
+			t.Fatalf("%s text missing %q: %s", tt.uri, tt.contains, content["text"])
+		}
+	}
+}
+
 func TestResourcesReadUnknownVerdandiResourceReturnsNotFound(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":"missing","method":"resources/read","params":{"uri":"verdandi://missing"}}` + "\n"
 	var output bytes.Buffer
@@ -570,6 +662,20 @@ func TestResourcesReadUnknownVerdandiResourceReturnsNotFound(t *testing.T) {
 	if errPayload["code"].(float64) != -32002 {
 		t.Fatalf("expected resource not found code, got %#v", errPayload)
 	}
+}
+
+func readResourceContent(t *testing.T, server *Server, uri string) map[string]any {
+	t.Helper()
+
+	input := `{"jsonrpc":"2.0","id":"read","method":"resources/read","params":{"uri":"` + uri + `"}}` + "\n"
+	var output bytes.Buffer
+	if err := server.Serve(strings.NewReader(input), &output); err != nil {
+		t.Fatalf("read %s serve: %v", uri, err)
+	}
+	responses := decodeResponses(t, output.String())
+	result := responses[0]["result"].(map[string]any)
+	contents := result["contents"].([]any)
+	return contents[0].(map[string]any)
 }
 
 func TestPromptsListExposesVerdandiWorkflowPrompts(t *testing.T) {
@@ -712,6 +818,30 @@ func TestCompletionCompleteSuggestsRunIDsForResourceTemplate(t *testing.T) {
 	values := completion["values"].([]any)
 	if len(values) != 1 || values[0] != runID {
 		t.Fatalf("expected run id completion %q, got %#v", runID, completion)
+	}
+}
+
+func TestCompletionCompleteSuggestsRunIDsForWorkflowResourceTemplate(t *testing.T) {
+	dataDir := t.TempDir()
+	server := NewServer(verdandi.NewExecutor(verdandi.Options{DataDir: dataDir}))
+	legacyRunID := createFixtureRun(t, server, "fixture legacy request")
+	workflowRunID := createFixtureWorkflowRun(t, server, "fixture workflow request")
+
+	for _, uri := range []string{"verdandi://workflows/{runId}", "verdandi://workflows/{runId}/handoff"} {
+		input := `{"jsonrpc":"2.0","id":"complete","method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"` + uri + `"},"argument":{"name":"runId","value":"run_"}}}` + "\n"
+		var output bytes.Buffer
+		if err := server.Serve(strings.NewReader(input), &output); err != nil {
+			t.Fatalf("serve completion for %s: %v", uri, err)
+		}
+
+		completion := completionFromResponse(t, output.String())
+		values := completion["values"].([]any)
+		if len(values) != 1 || values[0] != workflowRunID {
+			t.Fatalf("expected workflow run id completion %q for %s, got %#v", workflowRunID, uri, completion)
+		}
+		if values[0] == legacyRunID {
+			t.Fatalf("legacy run_plan id %q should not be suggested for workflow resource %s", legacyRunID, uri)
+		}
 	}
 }
 
@@ -1068,6 +1198,33 @@ func createFixtureRun(t *testing.T, server *Server, request string) string {
 	var output bytes.Buffer
 	if err := server.Serve(strings.NewReader(string(payload)+"\n"), &output); err != nil {
 		t.Fatalf("serve fixture run: %v", err)
+	}
+	responses := decodeResponses(t, output.String())
+	result := responses[0]["result"].(map[string]any)
+	return result["structuredContent"].(map[string]any)["runId"].(string)
+}
+
+func createFixtureWorkflowRun(t *testing.T, server *Server, request string) string {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "workflow-run",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "run",
+			"arguments": map[string]any{
+				"request": request,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture workflow run: %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := server.Serve(strings.NewReader(string(payload)+"\n"), &output); err != nil {
+		t.Fatalf("serve fixture workflow run: %v", err)
 	}
 	responses := decodeResponses(t, output.String())
 	result := responses[0]["result"].(map[string]any)

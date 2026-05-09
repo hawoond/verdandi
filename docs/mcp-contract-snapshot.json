@@ -55,6 +55,20 @@
         "type": "ref/resource",
         "uri": "verdandi://runs/{runId}/output"
       }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://workflows/{runId}"
+      }
+    },
+    {
+      "argument": "runId",
+      "ref": {
+        "type": "ref/resource",
+        "uri": "verdandi://workflows/{runId}/handoff"
+      }
     }
   ],
   "initialize": {
@@ -164,6 +178,20 @@
       "name": "run-output",
       "title": "Verdandi Run Output",
       "uriTemplate": "verdandi://runs/{runId}/output"
+    },
+    {
+      "description": "Read a prepared workflow package by runId.",
+      "mimeType": "application/json",
+      "name": "workflow",
+      "title": "Verdandi Workflow",
+      "uriTemplate": "verdandi://workflows/{runId}"
+    },
+    {
+      "description": "Read the Markdown handoff prompt for a prepared workflow.",
+      "mimeType": "text/markdown",
+      "name": "workflow-handoff",
+      "title": "Verdandi Workflow Handoff",
+      "uriTemplate": "verdandi://workflows/{runId}/handoff"
     }
   ],
   "resources": [
@@ -180,6 +208,20 @@
       "name": "agents",
       "title": "Verdandi Agents",
       "uri": "verdandi://agents"
+    },
+    {
+      "description": "List persisted agent and skill assets.",
+      "mimeType": "application/json",
+      "name": "assets",
+      "title": "Verdandi Assets",
+      "uri": "verdandi://assets"
+    },
+    {
+      "description": "List persisted skill assets.",
+      "mimeType": "application/json",
+      "name": "skills",
+      "title": "Verdandi Skills",
+      "uri": "verdandi://skills"
     }
   ],
   "tools": [

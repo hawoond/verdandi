@@ -41,6 +41,8 @@ func currentMCPContractSnapshot(t *testing.T) map[string]any {
 			{"ref": map[string]string{"type": "ref/resource", "uri": "verdandi://runs/{runId}"}, "argument": "runId"},
 			{"ref": map[string]string{"type": "ref/resource", "uri": "verdandi://runs/{runId}/events"}, "argument": "runId"},
 			{"ref": map[string]string{"type": "ref/resource", "uri": "verdandi://runs/{runId}/output"}, "argument": "runId"},
+			{"ref": map[string]string{"type": "ref/resource", "uri": "verdandi://workflows/{runId}"}, "argument": "runId"},
+			{"ref": map[string]string{"type": "ref/resource", "uri": "verdandi://workflows/{runId}/handoff"}, "argument": "runId"},
 		},
 		"transports": map[string]any{
 			"stdio": map[string]any{

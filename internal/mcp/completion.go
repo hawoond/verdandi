@@ -32,12 +32,26 @@ func (s *Server) complete(params json.RawMessage) (map[string]any, error) {
 	}
 
 	switch {
+	case supportsWorkflowRunIDCompletion(payload):
+		return s.completeWorkflowRunIDs(payload.Argument.Value)
 	case supportsRunIDCompletion(payload):
 		return s.completeRunIDs(payload.Argument.Value)
 	case supportsRequestCompletion(payload):
 		return s.completeRequests(payload.Argument.Value)
 	default:
 		return nil, &JSONRPCError{Code: -32602, Message: "Invalid completion reference", Data: payload.Ref}
+	}
+}
+
+func supportsWorkflowRunIDCompletion(payload completeParams) bool {
+	if payload.Argument.Name != "runId" || payload.Ref.Type != "ref/resource" {
+		return false
+	}
+	switch payload.Ref.URI {
+	case "verdandi://workflows/{runId}", "verdandi://workflows/{runId}/handoff":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -50,7 +64,9 @@ func supportsRunIDCompletion(payload completeParams) bool {
 		return payload.Ref.Name == "inspect-run" || payload.Ref.Name == "inspect-failed-run"
 	case "ref/resource":
 		switch payload.Ref.URI {
-		case "verdandi://runs/{runId}", "verdandi://runs/{runId}/events", "verdandi://runs/{runId}/output":
+		case "verdandi://runs/{runId}",
+			"verdandi://runs/{runId}/events",
+			"verdandi://runs/{runId}/output":
 			return true
 		default:
 			return false
@@ -80,6 +96,23 @@ func (s *Server) completeRunIDs(prefix string) (map[string]any, error) {
 	values := []string{}
 	for _, run := range runs {
 		if strings.HasPrefix(run.RunID, prefix) {
+			values = append(values, run.RunID)
+		}
+	}
+	return completionResult(values), nil
+}
+
+func (s *Server) completeWorkflowRunIDs(prefix string) (map[string]any, error) {
+	runs, err := s.completionRuns()
+	if err != nil {
+		return nil, err
+	}
+	values := []string{}
+	for _, run := range runs {
+		if !strings.HasPrefix(run.RunID, prefix) {
+			continue
+		}
+		if _, err := s.executor.Execute("get_workflow", map[string]any{"runId": run.RunID}); err == nil {
 			values = append(values, run.RunID)
 		}
 	}
