@@ -201,6 +201,228 @@ func TestToolAnalyzeReturnsExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkflowCreatesPersistentReusableAssets(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "접근성 좋은 계산기 앱을 기획하고 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "planner", Keyword: "기획"},
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentPlanner, Confidence: 0.92},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 5},
+			Plan:       plan,
+			Source:     AnalyzerKeyword,
+		},
+	})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow failed: %v", err)
+	}
+
+	if result["ok"] != true {
+		t.Fatalf("expected ok result, got %#v", result)
+	}
+	if result["action"] != "prepare_workflow" {
+		t.Fatalf("expected prepare_workflow action, got %#v", result["action"])
+	}
+	if result["status"] != "prepared" {
+		t.Fatalf("expected prepared status, got %#v", result["status"])
+	}
+	runID, ok := result["runId"].(string)
+	if !ok || runID == "" {
+		t.Fatalf("expected runId, got %#v", result["runId"])
+	}
+	outputDir, ok := result["outputDir"].(string)
+	if !ok || outputDir == "" {
+		t.Fatalf("expected outputDir, got %#v", result["outputDir"])
+	}
+	if !strings.HasPrefix(outputDir, filepath.Join(dataDir, "workflows", runID)) {
+		t.Fatalf("workflow outputDir %q is not under data dir run path", outputDir)
+	}
+	for _, name := range []string{"workflow.json", "handoff.md", "selected-assets.json"} {
+		if _, err := os.Stat(filepath.Join(outputDir, name)); err != nil {
+			t.Fatalf("expected workflow file %s: %v", name, err)
+		}
+	}
+
+	workflow, ok := result["workflow"].(WorkflowPackage)
+	if !ok {
+		t.Fatalf("expected typed WorkflowPackage, got %#v", result["workflow"])
+	}
+	if workflow.RunID != runID {
+		t.Fatalf("workflow runID = %q, want %q", workflow.RunID, runID)
+	}
+	if len(workflow.Agents) == 0 || len(workflow.Skills) == 0 || len(workflow.Tasks) == 0 {
+		t.Fatalf("expected reusable assets and tasks, got %#v", workflow)
+	}
+	assertWorkflowTasksReferenceAssets(t, workflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	skills, err := registry.ListSkills()
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if len(agents) != len(workflow.Agents) {
+		t.Fatalf("registry agents = %d, workflow agents = %d", len(agents), len(workflow.Agents))
+	}
+	if len(skills) != len(workflow.Skills) {
+		t.Fatalf("registry skills = %d, workflow skills = %d", len(skills), len(workflow.Skills))
+	}
+
+	status, err := tool.GetStatus(runID)
+	if err != nil {
+		t.Fatalf("get status: %v", err)
+	}
+	if status["status"] != "prepared" {
+		t.Fatalf("stored status = %#v, want prepared", status["status"])
+	}
+	summary := result["summary"].(Summary)
+	if summary.Success != 0 || summary.Failed != 0 {
+		t.Fatalf("prepared summary should not report execution success/failure, got %#v", summary)
+	}
+}
+
+func TestPrepareWorkflowReusesExistingAssetsWithoutActiveVersionChurn(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "접근성 좋은 계산기 앱을 기획하고 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "planner", Keyword: "기획"},
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent:     IntentResult{Category: IntentPlanner, Confidence: 0.92},
+			Complexity: ComplexityResult{Level: "MEDIUM", Score: 5},
+			Plan:       plan,
+			Source:     AnalyzerKeyword,
+		},
+	})
+
+	first, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("first PrepareWorkflow failed: %v", err)
+	}
+	second, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("second PrepareWorkflow failed: %v", err)
+	}
+
+	firstWorkflow := first["workflow"].(WorkflowPackage)
+	secondWorkflow := second["workflow"].(WorkflowPackage)
+	assertWorkflowTasksReferenceAssets(t, firstWorkflow)
+	assertWorkflowTasksReferenceAssets(t, secondWorkflow)
+
+	registry := NewAssetRegistry(dataDir)
+	agents, err := registry.ListAgents()
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(agents) != len(secondWorkflow.Agents) {
+		t.Fatalf("registry agents = %d, workflow agents = %d", len(agents), len(secondWorkflow.Agents))
+	}
+	activeByName := map[string]int{}
+	for _, agent := range agents {
+		if agent.Status == AssetStatusActive {
+			activeByName[agent.Name]++
+		}
+	}
+	for name, count := range activeByName {
+		if count > 1 {
+			t.Fatalf("agent %q has %d active versions; want at most 1", name, count)
+		}
+	}
+	for index, agent := range firstWorkflow.Agents {
+		if secondWorkflow.Agents[index].ID != agent.ID {
+			t.Fatalf("agent %d ID churned: first %q second %q", index, agent.ID, secondWorkflow.Agents[index].ID)
+		}
+	}
+}
+
+func TestPrepareWorkflowDoesNotReuseNeedsReviewAgent(t *testing.T) {
+	dataDir := t.TempDir()
+	request := "계산기 앱을 구현하고 테스트해줘"
+	orchestrator := NewOrchestrator(dataDir)
+	plan, err := orchestrator.NormalizePlan(request, []StageDef{
+		{Stage: "code-writer", Keyword: "구현"},
+	})
+	if err != nil {
+		t.Fatalf("normalize plan: %v", err)
+	}
+	candidate := normalizeAgentAsset(assetAgentForStage(plan.Stages[0]), "")
+	needsReview := candidate
+	needsReview.Status = AssetStatusNeedsReview
+	if err := NewAssetRegistry(dataDir).UpsertAgent(needsReview); err != nil {
+		t.Fatalf("seed needs-review agent: %v", err)
+	}
+	tool := NewToolWithAnalyzer(Options{DataDir: dataDir}, staticAnalyzer{
+		result: AnalysisResult{
+			Intent: IntentResult{Category: IntentCodeWriter, Confidence: 0.9},
+			Plan:   plan,
+			Source: AnalyzerKeyword,
+		},
+	})
+
+	result, err := tool.PrepareWorkflow(request)
+	if err != nil {
+		t.Fatalf("PrepareWorkflow failed: %v", err)
+	}
+
+	workflow := result["workflow"].(WorkflowPackage)
+	var implementationAgent AgentAsset
+	for _, agent := range workflow.Agents {
+		if agent.Name == needsReview.Name {
+			implementationAgent = agent
+			break
+		}
+	}
+	if implementationAgent.ID == "" {
+		t.Fatalf("expected workflow to include implementation agent named %q: %#v", needsReview.Name, workflow.Agents)
+	}
+	if implementationAgent.ID == needsReview.ID {
+		t.Fatalf("PrepareWorkflow reused needs-review agent %q", needsReview.ID)
+	}
+	if implementationAgent.Status != AssetStatusActive {
+		t.Fatalf("new workflow agent status = %q, want active", implementationAgent.Status)
+	}
+}
+
+func assertWorkflowTasksReferenceAssets(t *testing.T, workflow WorkflowPackage) {
+	t.Helper()
+	agentIDs := map[string]bool{}
+	for _, agent := range workflow.Agents {
+		agentIDs[agent.ID] = true
+	}
+	skillIDs := map[string]bool{}
+	for _, skill := range workflow.Skills {
+		skillIDs[skill.ID] = true
+	}
+	for _, task := range workflow.Tasks {
+		if !agentIDs[task.AgentID] {
+			t.Fatalf("task %q references missing agent %q", task.ID, task.AgentID)
+		}
+		for _, skillID := range task.SkillIDs {
+			if !skillIDs[skillID] {
+				t.Fatalf("task %q references missing skill %q", task.ID, skillID)
+			}
+		}
+	}
+}
+
 func TestToolUsesConfiguredAnalyzer(t *testing.T) {
 	dataDir := t.TempDir()
 	tool := NewTool(Options{

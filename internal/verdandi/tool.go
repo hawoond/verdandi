@@ -21,7 +21,9 @@ type Tool struct {
 	orchestrator Orchestrator
 	store        Store
 	agents       AgentRegistry
+	assets       AssetRegistry
 	events       EventStore
+	dataDir      string
 }
 
 type ProgressEvent struct {
@@ -52,7 +54,9 @@ func NewTool(options Options) Tool {
 		orchestrator: orchestrator,
 		store:        NewStoreForDataDir(dataDir),
 		agents:       agents,
+		assets:       NewAssetRegistry(dataDir),
 		events:       NewEventStoreForDataDir(dataDir),
+		dataDir:      dataDir,
 	}
 }
 
@@ -175,6 +179,88 @@ func (t Tool) ValidatePlan(request string, stages []StageDef) (map[string]any, e
 		"plan":       plan,
 		"analyzer":   AnalyzerClient,
 	}, nil
+}
+
+func (t Tool) PrepareWorkflow(request string, options ...map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(request) == "" {
+		return nil, fmt.Errorf("request 문자열이 필요합니다")
+	}
+
+	analysis, err := t.analyzeRequest(request)
+	if err != nil {
+		return nil, err
+	}
+
+	runID := createRunID()
+	createdAt := time.Now().UTC()
+	pkg := BuildWorkflowPackageFromPlan(runID, request, analysis.Plan)
+	existingAgents, err := t.assets.ListAgents()
+	if err != nil {
+		return nil, err
+	}
+	for index, agent := range pkg.Agents {
+		originalID := agent.ID
+		selected, found := findReusableAgentAsset(existingAgents, agent)
+		if !found {
+			selected, err = t.assets.SaveAgentVersion(agent, "")
+			if err != nil {
+				return nil, err
+			}
+			existingAgents = append(existingAgents, selected)
+		}
+		pkg.Agents[index] = selected
+		replaceWorkflowAgentID(&pkg, originalID, selected.ID)
+	}
+	for _, skill := range pkg.Skills {
+		if err := t.assets.UpsertSkill(skill); err != nil {
+			return nil, err
+		}
+	}
+
+	written, err := WriteWorkflowPackage(t.dataDir, pkg)
+	if err != nil {
+		return nil, err
+	}
+	pkg = written.Package
+	completedAt := time.Now().UTC()
+	summary := Summary{
+		TotalStages: len(pkg.Tasks),
+		Success:     0,
+		Failed:      0,
+		OutputDir:   written.OutputDir,
+		Files:       written.Files,
+	}
+	record := RunRecord{
+		RunID:          runID,
+		Status:         "prepared",
+		Request:        request,
+		Analyzer:       analysis.Source,
+		FallbackReason: analysis.FallbackReason,
+		OutputDir:      written.OutputDir,
+		Summary:        summary,
+		Stages:         preparedStageResults(pkg.Tasks, createdAt, completedAt),
+		CreatedAt:      createdAt,
+		CompletedAt:    completedAt,
+	}
+	if err := t.store.Save(record); err != nil {
+		return nil, err
+	}
+
+	result := map[string]any{
+		"ok":        true,
+		"action":    "prepare_workflow",
+		"runId":     record.RunID,
+		"status":    record.Status,
+		"request":   request,
+		"analyzer":  record.Analyzer,
+		"outputDir": record.OutputDir,
+		"workflow":  pkg,
+		"summary":   summary,
+	}
+	if record.FallbackReason != "" {
+		result["fallbackReason"] = record.FallbackReason
+	}
+	return result, nil
 }
 
 func (t Tool) normalizeClientPlan(request string, stages []StageDef) (Plan, error) {
@@ -450,6 +536,8 @@ func (t Tool) HandleContext(ctx context.Context, action string, params map[strin
 			return nil, err
 		}
 		return t.ValidatePlan(requiredString(params, "request"), stages)
+	case "prepare_workflow":
+		return t.PrepareWorkflow(requiredString(params, "request"), optionalObject(params, "options"))
 	case "orchestrate":
 		return t.Orchestrate(requiredString(params, "request"), optionalObject(params, "options"))
 	case "status", "get_status":
@@ -472,6 +560,55 @@ func DefaultDataDir() string {
 		return value
 	}
 	return ".verdandi"
+}
+
+func findReusableAgentAsset(existing []AgentAsset, candidate AgentAsset) (AgentAsset, bool) {
+	for _, agent := range existing {
+		if !strings.EqualFold(agent.Name, candidate.Name) {
+			continue
+		}
+		if agent.Status != AssetStatusActive {
+			continue
+		}
+		return agent, true
+	}
+	return AgentAsset{}, false
+}
+
+func replaceWorkflowAgentID(pkg *WorkflowPackage, oldID string, newID string) {
+	if oldID == newID {
+		return
+	}
+	for taskIndex := range pkg.Tasks {
+		if pkg.Tasks[taskIndex].AgentID == oldID {
+			pkg.Tasks[taskIndex].AgentID = newID
+		}
+	}
+	for skillIndex := range pkg.Skills {
+		for usedByIndex, usedByAgent := range pkg.Skills[skillIndex].UsedByAgents {
+			if usedByAgent == oldID {
+				pkg.Skills[skillIndex].UsedByAgents[usedByIndex] = newID
+			}
+		}
+	}
+}
+
+func preparedStageResults(tasks []WorkflowTask, started time.Time, ended time.Time) []StageResult {
+	stages := make([]StageResult, 0, len(tasks))
+	for _, task := range tasks {
+		stages = append(stages, StageResult{
+			Stage:  task.ID,
+			Status: "prepared",
+			Result: &StageOutput{
+				Type:    "workflow-task",
+				Status:  "prepared",
+				Message: task.Description,
+			},
+			Started: started,
+			Ended:   ended,
+		})
+	}
+	return stages
 }
 
 func requiredString(params map[string]any, key string) string {
