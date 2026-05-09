@@ -1,21 +1,19 @@
 # Verdandi
 
-Verdandi is a pure Go local orchestration runtime that turns natural-language
-requests into small, inspectable workflows. It ships with both a CLI and a real
-MCP stdio server, so the same runtime can be used from a terminal or an
-MCP-capable LLM client.
+Verdandi is a pure Go MCP runtime that turns natural-language requests into
+workflow packages for external LLM coding agents. It ships with both a CLI and a
+real MCP stdio server, so a terminal and an MCP-capable LLM client can use the
+same agent/skill asset registry.
 
 ## What It Does
 
-- Analyzes natural-language requests and builds an execution plan.
-- Splits work into `planner`, `code-writer`, `tester`, `documenter`, and `deployer` stages.
-- Produces structured planner artifacts: requirements, acceptance criteria, task breakdown, and risks.
-- Stores generated outputs and run history under `.verdandi/`.
-- Exposes MCP tools: `run`, `run_plan`, `validate_plan`, `analyze`, `orchestrate`, `get_status`, `open_output`, and `list_agents`.
-- Exposes MCP resources, resource templates, and prompts for client-neutral state discovery and reusable workflows.
-- Tracks dynamic agent contracts and lifecycle recommendations across runs.
-- Validates generated Go projects with `go test ./...`.
-- Selects the request analyzer backend from `keyword`, `llm`, or `auto`.
+- Analyzes natural-language requests and creates workflow packages for LLM coding agents.
+- Verdandi does not directly generate application code. External LLM coding agents write the code.
+- Dynamically creates request-specific agent assets and skill assets, or reuses existing assets.
+- Keeps generated agents and skills in `.verdandi/registry/assets.json` instead of deleting them.
+- Searches existing assets in later work and uses success rates and failure history to recommend reuse, enhancement, separation, or deprecation.
+- Exposes MCP tools including `prepare_workflow`, `recommend_assets`, `record_outcome`, `list_agents`, and `list_skills`.
+- Stores workflow handoffs, selected assets, and task graphs under `.verdandi/workflows/{runId}/`.
 
 ## Quick Start
 
@@ -112,9 +110,13 @@ Resources:
 
 - `verdandi://runs`
 - `verdandi://agents`
+- `verdandi://assets`
+- `verdandi://skills`
 - `verdandi://runs/{runId}`
 - `verdandi://runs/{runId}/events`
 - `verdandi://runs/{runId}/output`
+- `verdandi://workflows/{runId}`
+- `verdandi://workflows/{runId}/handoff`
 
 Prompts:
 
@@ -154,16 +156,16 @@ the keyword analyzer if the LLM response is unavailable or invalid.
 
 ## Observability
 
-Verdandi records run history, stage results, agent metrics, and visualization
-events under `.verdandi/`. MCP resources expose the same state that the optional
-Spinning Wheel visualizer streams from [docs/spinning-wheel.md](docs/spinning-wheel.md).
+Verdandi records workflow packages, run history, agent/skill metrics, lifecycle
+outcomes, and visualization events under `.verdandi/`. MCP resources expose the
+same state that the optional Spinning Wheel visualizer streams from
+[docs/spinning-wheel.md](docs/spinning-wheel.md).
 
 ## Current Scope
 
-Verdandi is currently a local MVP runtime. It does not spawn external agent
-processes yet. Its focus is request analysis, execution plan previews, local
-file generation, `go test ./...` validation, run history lookup, MCP-standard
-state discovery, and local run visualization.
+Verdandi is currently a local MCP-based asset orchestrator. It does not write
+application source code directly; it focuses on handoffs, selected assets, task
+graphs, and outcome recording for external LLM coding agents.
 
 ## Development Checks
 

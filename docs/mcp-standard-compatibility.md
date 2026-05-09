@@ -17,7 +17,10 @@ Verdandi does not currently advertise resource subscriptions or prompt list chan
 
 Verdandi exposes these MCP tools:
 
-- `run`: let Verdandi analyze a natural-language request and execute the normalized workflow.
+- `run`: let Verdandi analyze a natural-language request and prepare a workflow package for an external LLM coding agent.
+- `prepare_workflow`: prepare a reusable agent/skill workflow package without using the compatibility `run` action name.
+- `recommend_assets`: list active reusable agent and skill assets for a request.
+- `record_outcome`: record success, failure, error text, and lessons for a persisted asset.
 - `run_plan`: run a client-selected ordered stage plan after Verdandi validates and normalizes it.
 - `validate_plan`: validate and normalize a client-selected plan without executing it.
 - `analyze`: inspect Verdandi's own analyzer output without execution.
@@ -25,6 +28,7 @@ Verdandi exposes these MCP tools:
 - `get_status`: read a previous run record by `runId`.
 - `open_output`: list generated output files for a previous run.
 - `list_agents`: list persisted agent contracts and lifecycle recommendations.
+- `list_skills`: list persisted skill assets.
 
 Tool execution failures are returned as tool results with `isError: true` so clients can retry with corrected arguments. Protocol-level problems such as unknown tools still return JSON-RPC errors.
 
@@ -34,12 +38,16 @@ Static resources:
 
 - `verdandi://runs`: persisted run records.
 - `verdandi://agents`: persisted agent contracts and lifecycle recommendations.
+- `verdandi://assets`: persisted agent and skill assets.
+- `verdandi://skills`: persisted skill assets.
 
 Resource templates:
 
 - `verdandi://runs/{runId}`: one run record.
 - `verdandi://runs/{runId}/events`: visualization events for a run.
 - `verdandi://runs/{runId}/output`: output file metadata for a run.
+- `verdandi://workflows/{runId}`: one prepared workflow package.
+- `verdandi://workflows/{runId}/handoff`: Markdown handoff prompt for a prepared workflow.
 
 Unknown resource URIs return JSON-RPC `-32002` with the requested URI in `error.data`.
 
@@ -76,17 +84,20 @@ Supported resource template completions:
 - `runId` for `verdandi://runs/{runId}`
 - `runId` for `verdandi://runs/{runId}/events`
 - `runId` for `verdandi://runs/{runId}/output`
+- `runId` for `verdandi://workflows/{runId}`
+- `runId` for `verdandi://workflows/{runId}/handoff`
 
 Suggestions are prefix-filtered, capped at 100 values, and sourced only from
-local `.verdandi` run history. Completion values intentionally avoid generated
-file paths, output contents, event payloads, and agent internals.
+local `.verdandi` run history. Workflow resource completions only suggest runs
+that have prepared workflow package metadata. Completion values intentionally
+avoid generated file paths, output contents, event payloads, and agent internals.
 
 ## Progress
 
 When a `tools/call` request includes `_meta.progressToken`, Verdandi may emit
 `notifications/progress` messages before the final tool response. Progress
 notifications are currently emitted for `run`, `run_plan`, and `orchestrate`
-stage lifecycle updates. Each notification includes:
+workflow preparation or stage lifecycle updates. Each notification includes:
 
 - `progressToken`: the original token supplied by the client
 - `progress`: the number of completed stages
@@ -185,7 +196,9 @@ bash scripts/mcp_http_smoke.sh
 
 The MCP server ties together the current Verdandi runtime features:
 
-- Planner artifacts from the `planner` stage are discoverable through run output.
+- `run` and `prepare_workflow` create workflow packages for external LLM coding agents.
+- Workflow handoffs, selected assets, and task graphs are discoverable through workflow resources.
 - Client-selected plans use `validate_plan` and `run_plan`.
 - Agent lifecycle recommendations are exposed through `list_agents` and `verdandi://agents`.
+- Persistent agent and skill assets are exposed through `recommend_assets`, `list_skills`, `verdandi://assets`, and `verdandi://skills`.
 - Spinning Wheel consumes the same persisted runs and events that MCP resources expose.

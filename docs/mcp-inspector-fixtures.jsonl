@@ -6,11 +6,16 @@
 {"jsonrpc":"2.0","id":"templates","method":"resources/templates/list","params":{}}
 {"jsonrpc":"2.0","id":"runs-resource","method":"resources/read","params":{"uri":"verdandi://runs"}}
 {"jsonrpc":"2.0","id":"agents-resource","method":"resources/read","params":{"uri":"verdandi://agents"}}
+{"jsonrpc":"2.0","id":"assets-resource","method":"resources/read","params":{"uri":"verdandi://assets"}}
+{"jsonrpc":"2.0","id":"skills-resource","method":"resources/read","params":{"uri":"verdandi://skills"}}
 {"jsonrpc":"2.0","id":"prompts","method":"prompts/list","params":{}}
 {"jsonrpc":"2.0","id":"prompts-page","method":"prompts/list","params":{"cursor":"0"}}
 {"jsonrpc":"2.0","id":"validate-prompt","method":"prompts/get","params":{"name":"validate-plan","arguments":{"request":"Build a calculator app and verify it."}}}
 {"jsonrpc":"2.0","id":"complete-request","method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"validate-plan"},"argument":{"name":"request","value":""}}}
 {"jsonrpc":"2.0","id":"complete-run","method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"verdandi://runs/{runId}"},"argument":{"name":"runId","value":"run_"}}}
+{"jsonrpc":"2.0","id":"prepare-tool","method":"tools/call","params":{"name":"prepare_workflow","arguments":{"request":"Build a calculator app and verify it."}}}
+{"jsonrpc":"2.0","id":"recommend-assets-tool","method":"tools/call","params":{"name":"recommend_assets","arguments":{"request":"Build a calculator app and verify it."}}}
+{"jsonrpc":"2.0","id":"complete-workflow","method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"verdandi://workflows/{runId}"},"argument":{"name":"runId","value":"run_"}}}
 {"jsonrpc":"2.0","id":"validate-tool","method":"tools/call","params":{"name":"validate_plan","arguments":{"request":"Build a calculator app and verify it.","stages":[{"stage":"planner","keyword":"fixture"},{"stage":"code-writer","keyword":"fixture"},{"stage":"tester","keyword":"fixture"}]}}}
 {"jsonrpc":"2.0","id":"progress-run","method":"tools/call","params":{"_meta":{"progressToken":"fixture-progress"},"name":"run_plan","arguments":{"request":"Build a calculator app and verify it.","stages":[{"stage":"code-writer","keyword":"fixture"}]}}}
 {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"unknown-fixture-request","reason":"fixture cancellation"}}
