@@ -1,9 +1,10 @@
 # Verdandi
 
-Verdandi is a pure Go local orchestration runtime for turning natural-language
-requests into small, inspectable workflows. It provides a CLI plus MCP stdio and
-Streamable HTTP transports, so the same local runtime can be used from a
-terminal, a local MCP client, or an HTTP-capable MCP gateway.
+Verdandi is a pure Go MCP runtime for turning natural-language requests into
+workflow packages and persistent agent/skill assets for external LLM coding
+agents. It provides a CLI plus MCP stdio and Streamable HTTP transports, so the
+same local asset registry can be used from a terminal, a local MCP client, or an
+HTTP-capable MCP gateway.
 
 ## MCP Server
 
@@ -18,6 +19,18 @@ JSON-RPC fixture requests.
 ## Spinning Wheel
 
 Spinning Wheel is an optional visualizer for Verdandi runs. It shows agent creation, movement, decisions, speech bubbles, and live event streaming. See [docs/spinning-wheel.md](docs/spinning-wheel.md) for setup and operation.
+
+## Upgrade
+
+After installing a release, upgrade from GitHub Releases with:
+
+```bash
+verdandi upgrade
+```
+
+Use `verdandi upgrade --dry-run` to preview the selected archive, or
+`verdandi upgrade --version 0.0.2 --install-dir "$HOME/.local/bin"` to install a
+specific version and location.
 
 Choose a language:
 

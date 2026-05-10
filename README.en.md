@@ -206,6 +206,14 @@ manifest before copying binaries:
 VERDANDI_INSTALL_DIR="$HOME/.local/bin" bash scripts/install_release.sh dist/verdandi_0.1.0_linux_amd64.tar.gz
 ```
 
+Installed binaries can upgrade themselves from GitHub Releases:
+
+```bash
+verdandi upgrade
+verdandi upgrade --dry-run
+verdandi upgrade --version 0.0.2 --install-dir "$HOME/.local/bin"
+```
+
 Release builds inject version metadata into all three binaries:
 
 ```bash

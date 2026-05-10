@@ -228,6 +228,7 @@ func TestReleaseNotesScriptIncludesInstallAndChecksums(t *testing.T) {
 		"tar -xzf",
 		"install_release.sh",
 		"verdandi --version",
+		"verdandi upgrade",
 		"checksums.txt",
 		"manifest.json",
 		"sbom.spdx.json",
@@ -301,6 +302,62 @@ exit 0
 	}
 	if !strings.Contains(string(log), "sbom.spdx.json") {
 		t.Fatalf("expected SBOM asset to be uploaded, got:\n%s", log)
+	}
+}
+
+func TestPublishReleaseScriptWorksWithoutGitHubSHA(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	dist := t.TempDir()
+	for name, content := range map[string]string{
+		"verdandi_1.2.3_linux_amd64.tar.gz": "archive",
+		"checksums.txt":                     "abc123  verdandi_1.2.3_linux_amd64.tar.gz\n",
+		"manifest.json":                     `{"product":"verdandi","version":"1.2.3","artifacts":[]}` + "\n",
+		"sbom.spdx.json":                    `{"spdxVersion":"SPDX-2.3","packages":[]}` + "\n",
+		"release-notes.md":                  "# Verdandi 1.2.3\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dist, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	fakeGH := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(fakeGH, []byte(`#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+if [[ "$1 $2" == "release view" ]]; then
+  exit 1
+fi
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "publish_release.sh"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_LOG="+logPath,
+		"VERDANDI_VERSION=1.2.3",
+		"VERDANDI_DIST_DIR="+dist,
+		"GITHUB_SHA=",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("publish release script failed without GITHUB_SHA: %v\n%s", err, output)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake gh log: %v", err)
+	}
+	if !strings.Contains(string(log), "release create v1.2.3") {
+		t.Fatalf("expected release create for v1.2.3, got:\n%s", log)
+	}
+	if strings.Contains(string(log), "--target") {
+		t.Fatalf("did not expect --target without GITHUB_SHA, got:\n%s", log)
 	}
 }
 

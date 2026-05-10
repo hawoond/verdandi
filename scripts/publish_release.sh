@@ -26,9 +26,9 @@ if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "${assets[@]}" --clobber
   gh release edit "$TAG" --title "Verdandi $TAG" --notes-file "$NOTES"
 else
-  target_args=()
   if [[ -n "${GITHUB_SHA:-}" ]]; then
-    target_args=(--target "$GITHUB_SHA")
+    gh release create "$TAG" "${assets[@]}" --target "$GITHUB_SHA" --title "Verdandi $TAG" --notes-file "$NOTES"
+  else
+    gh release create "$TAG" "${assets[@]}" --title "Verdandi $TAG" --notes-file "$NOTES"
   fi
-  gh release create "$TAG" "${assets[@]}" "${target_args[@]}" --title "Verdandi $TAG" --notes-file "$NOTES"
 fi

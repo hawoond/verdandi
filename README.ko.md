@@ -206,6 +206,14 @@ checksum을 확인한 뒤 다운로드한 archive를 설치할 수 있습니다.
 VERDANDI_INSTALL_DIR="$HOME/.local/bin" bash scripts/install_release.sh dist/verdandi_0.1.0_linux_amd64.tar.gz
 ```
 
+설치된 바이너리는 GitHub Release에서 직접 업그레이드할 수 있습니다.
+
+```bash
+verdandi upgrade
+verdandi upgrade --dry-run
+verdandi upgrade --version 0.0.2 --install-dir "$HOME/.local/bin"
+```
+
 릴리스 빌드는 세 바이너리에 version metadata를 주입합니다.
 
 ```bash
