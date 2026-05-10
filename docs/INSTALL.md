@@ -25,6 +25,28 @@ To install somewhere other than `/usr/local/bin`:
 VERDANDI_INSTALL_DIR="$HOME/.local/bin" bash scripts/install_release.sh verdandi_VERSION_OS_ARCH.tar.gz
 ```
 
+## Upgrade
+
+After one release is installed, the `verdandi` CLI can fetch and install the
+matching archive for your OS and architecture from GitHub Releases:
+
+```bash
+verdandi upgrade
+```
+
+Useful options:
+
+```bash
+verdandi upgrade --dry-run
+verdandi upgrade --version 0.0.2
+verdandi upgrade --install-dir "$HOME/.local/bin"
+verdandi upgrade --force
+```
+
+The upgrade command downloads `checksums.txt` and `manifest.json`, verifies the
+selected archive hash against both files, then installs `verdandi`,
+`verdandi-mcp`, and `verdandi-spinning-wheel`.
+
 ## Check Installed Binaries
 
 ```bash

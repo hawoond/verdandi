@@ -50,6 +50,13 @@ fi
   echo
   echo "For Windows, download the matching \`.zip\` archive and run the \`.exe\` binaries. Each archive also includes \`docs/INSTALL.md\`."
   echo
+  echo "## Upgrade"
+  echo
+  echo '```bash'
+  echo "verdandi upgrade"
+  echo "verdandi upgrade --version $VERSION"
+  echo '```'
+  echo
   echo "## Assets"
   echo
   for artifact in "$DIST_DIR"/verdandi_"$VERSION"_*.tar.gz "$DIST_DIR"/verdandi_"$VERSION"_*.zip; do
