@@ -258,23 +258,16 @@ func installArchive(archiveName string, archive []byte, installDir string) error
 			return err
 		}
 	}
-	entries, err := os.ReadDir(tmp)
+	packageDir, err := findPackageDir(tmp)
 	if err != nil {
 		return err
 	}
-	if len(entries) == 0 {
-		return fmt.Errorf("archive did not contain a package directory")
-	}
-	packageDir := filepath.Join(tmp, entries[0].Name())
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return err
 	}
 	for _, binary := range []string{"verdandi", "verdandi-mcp", "verdandi-spinning-wheel"} {
-		source := filepath.Join(packageDir, binary)
-		if _, err := os.Stat(source); err != nil && os.IsNotExist(err) {
-			source = filepath.Join(packageDir, binary+".exe")
-		}
-		if _, err := os.Stat(source); err != nil {
+		source, err := binaryPath(packageDir, binary)
+		if err != nil {
 			return fmt.Errorf("missing binary in archive: %s", binary)
 		}
 		target := filepath.Join(installDir, binary)
@@ -283,6 +276,51 @@ func installArchive(archiveName string, archive []byte, installDir string) error
 		}
 	}
 	return nil
+}
+
+func findPackageDir(root string) (string, error) {
+	if hasBinaries(root) {
+		return root, nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if isArchiveMetadata(entry.Name()) || !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(root, entry.Name())
+		if hasBinaries(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("archive did not contain Verdandi binaries")
+}
+
+func hasBinaries(dir string) bool {
+	for _, binary := range []string{"verdandi", "verdandi-mcp", "verdandi-spinning-wheel"} {
+		if _, err := binaryPath(dir, binary); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func binaryPath(dir string, binary string) (string, error) {
+	source := filepath.Join(dir, binary)
+	if _, err := os.Stat(source); err == nil {
+		return source, nil
+	}
+	source = filepath.Join(dir, binary+".exe")
+	if _, err := os.Stat(source); err == nil {
+		return source, nil
+	}
+	return "", os.ErrNotExist
+}
+
+func isArchiveMetadata(name string) bool {
+	return strings.HasPrefix(name, "._") || name == "__MACOSX"
 }
 
 func extractTarGzip(data []byte, destination string) error {

@@ -75,7 +75,7 @@ with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
 PY
   else
     archive="$DIST_DIR/$package.tar.gz"
-    tar -C "$TMP_DIR" -czf "$archive" "$package"
+    COPYFILE_DISABLE=1 tar -C "$TMP_DIR" -czf "$archive" "$package"
   fi
 done
 

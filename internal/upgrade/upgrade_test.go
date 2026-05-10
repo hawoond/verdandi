@@ -107,6 +107,25 @@ func TestRunRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestInstallArchiveIgnoresAppleDoubleEntries(t *testing.T) {
+	archiveName := "verdandi_1.2.3_darwin_arm64.tar.gz"
+	installDir := t.TempDir()
+
+	if err := installArchive(archiveName, createAppleDoubleArchive(t, archiveName), installDir); err != nil {
+		t.Fatalf("installArchive returned error: %v", err)
+	}
+	for _, binary := range []string{"verdandi", "verdandi-mcp", "verdandi-spinning-wheel"} {
+		path := filepath.Join(installDir, binary)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected installed %s: %v", binary, err)
+		}
+		if !strings.Contains(string(data), "fake "+binary) {
+			t.Fatalf("unexpected installed %s content: %s", binary, data)
+		}
+	}
+}
+
 func fakeReleaseServer(t *testing.T, tag string, files map[string][]byte) *httptest.Server {
 	t.Helper()
 
@@ -221,6 +240,71 @@ func createReleaseArchive(t *testing.T, archiveName string) []byte {
 		t.Fatalf("read archive: %v", err)
 	}
 	return data
+}
+
+func createAppleDoubleArchive(t *testing.T, archiveName string) []byte {
+	t.Helper()
+
+	tmp := t.TempDir()
+	archivePath := filepath.Join(tmp, archiveName)
+	packageName := strings.TrimSuffix(archiveName, ".tar.gz")
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	writeTarFile(t, tarWriter, "._"+packageName, []byte("mac metadata"))
+	writeTarDir(t, tarWriter, packageName)
+	for _, binary := range []string{"verdandi", "verdandi-mcp", "verdandi-spinning-wheel"} {
+		writeTarFile(t, tarWriter, filepath.ToSlash(filepath.Join(packageName, "._"+binary)), []byte("mac metadata"))
+		writeTarFile(t, tarWriter, filepath.ToSlash(filepath.Join(packageName, binary)), []byte("fake "+binary+"\n"))
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	return data
+}
+
+func writeTarDir(t *testing.T, tarWriter *tar.Writer, name string) {
+	t.Helper()
+
+	header := &tar.Header{
+		Name:     filepath.ToSlash(name),
+		Mode:     0o755,
+		Typeflag: tar.TypeDir,
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("write tar dir: %v", err)
+	}
+}
+
+func writeTarFile(t *testing.T, tarWriter *tar.Writer, name string, data []byte) {
+	t.Helper()
+
+	header := &tar.Header{
+		Name:     filepath.ToSlash(name),
+		Mode:     0o755,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write(data); err != nil {
+		t.Fatalf("write tar body: %v", err)
+	}
 }
 
 func createZipFromDir(t *testing.T, stage string, archivePath string, packageName string) {
